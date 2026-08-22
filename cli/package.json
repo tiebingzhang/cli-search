@@ -1,0 +1,11 @@
+{
+  "name": "chrome-cli-search",
+  "version": "1.0.0",
+  "private": true,
+  "bin": {
+    "search-cli": "./bin/search-cli.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

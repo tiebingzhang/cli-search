@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "CLI Browser Search Bridge",
+  "version": "1.0.0",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "CLI Browser Search Bridge"
+  },
+  "permissions": ["tabs", "scripting", "alarms", "storage"],
+  "host_permissions": ["<all_urls>"]
+}
