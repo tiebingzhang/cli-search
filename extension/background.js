@@ -2,6 +2,10 @@ const WS_PORT = 47285;
 
 let socket = null;
 
+// tabId -> { [frameLetter]: frameId }, populated by the most recent snapshot
+const frameMapsByTab = new Map();
+const FRAME_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
 async function getReuseTabId() {
   const { reuseTabId } = await chrome.storage.session.get('reuseTabId');
   return typeof reuseTabId === 'number' ? reuseTabId : null;
@@ -111,7 +115,7 @@ async function getCurrentTabId() {
 
 // --- injected page functions (must be self-contained; run in the page's isolated world) ---
 
-function pageLabelElements() {
+function pageLabelElements(framePrefix) {
   const old = document.getElementById('__cli_overlay_root__');
   if (old) old.remove();
   window.__cliLabels = {};
@@ -129,7 +133,7 @@ function pageLabelElements() {
 
   const CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   function idFor(i) {
-    return CHARS[Math.floor(i / 36) % 36] + CHARS[i % 36];
+    return (framePrefix || '') + CHARS[Math.floor(i / 36) % 36] + CHARS[i % 36];
   }
 
   function isVisible(el) {
@@ -137,6 +141,29 @@ function pageLabelElements() {
     if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) return false;
     const rect = el.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
+  }
+
+  // Collect all interactive elements, including those inside Shadow DOM
+  function collectElements(root) {
+    const seen = new Set();
+    const elements = [];
+    function add(el) {
+      if (!seen.has(el)) {
+        seen.add(el);
+        elements.push(el);
+      }
+    }
+    const selector = 'a, button, input, textarea, select, [role], [onclick], [contenteditable], [tabindex]';
+    root.querySelectorAll(selector).forEach(add);
+    // Catch framework-rendered components (React/Vue click handlers with no semantic markup)
+    root.querySelectorAll('div, span, li, slot').forEach(add);
+    // Recurse into shadow roots
+    root.querySelectorAll('*').forEach((el) => {
+      if (el.shadowRoot) {
+        collectElements(el.shadowRoot).forEach(add);
+      }
+    });
+    return elements;
   }
 
   function isInteractive(el) {
@@ -148,12 +175,14 @@ function pageLabelElements() {
     if (el.isContentEditable) return true;
     const tabindex = el.getAttribute('tabindex');
     if (tabindex !== null && parseInt(tabindex, 10) >= 0) return true;
+    // Catch framework-rendered components (React/Vue click handlers with no semantic markup)
+    if (tag === 'div' || tag === 'span' || tag === 'li' || tag === 'slot') {
+      if (getComputedStyle(el).cursor === 'pointer') return true;
+    }
     return false;
   }
 
-  const candidates = Array.from(
-    document.querySelectorAll('a, button, input, textarea, select, [role], [onclick], [contenteditable], [tabindex]')
-  ).filter((el) => isInteractive(el) && isVisible(el));
+  const candidates = collectElements(document).filter((el) => isInteractive(el) && isVisible(el));
 
   const elements = [];
   let i = 0;
@@ -237,6 +266,15 @@ function pageTypeLabel(id, text) {
 
 // --- request dispatch ---
 
+function resolveFrameId(tabId, elementId) {
+  const frameMap = frameMapsByTab.get(tabId);
+  if (!frameMap) throw new Error('no snapshot taken yet - run snapshot first');
+  const prefix = Object.prototype.hasOwnProperty.call(frameMap, '') ? '' : elementId[0];
+  const frameId = frameMap[prefix];
+  if (frameId === undefined) throw new Error(`unknown element id: ${elementId}`);
+  return frameId;
+}
+
 async function handleRequest(msg) {
   const { action, query, url, waitMs, links, elementId, text } = msg;
 
@@ -260,14 +298,33 @@ async function handleRequest(msg) {
 
   if (action === 'snapshot') {
     const tabId = await getCurrentTabId();
-    const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: pageLabelElements });
-    return { elements: result };
+    // Discover every frame in the tab (SPAs often render main content in a same-origin iframe).
+    const discovery = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: () => true });
+    const frameMap = {};
+    const elements = [];
+    const perFrame = await Promise.all(
+      discovery.map((frame, i) => {
+        const prefix = discovery.length > 1 ? FRAME_CHARS[i % FRAME_CHARS.length] : '';
+        frameMap[prefix] = frame.frameId;
+        return chrome.scripting.executeScript({
+          target: { tabId, frameIds: [frame.frameId] },
+          func: pageLabelElements,
+          args: [prefix],
+        });
+      })
+    );
+    for (const [{ result }] of perFrame) {
+      elements.push(...result);
+    }
+    frameMapsByTab.set(tabId, frameMap);
+    return { elements };
   }
 
   if (action === 'click') {
     const tabId = await getCurrentTabId();
+    const frameId = resolveFrameId(tabId, elementId);
     const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId },
+      target: { tabId, frameIds: [frameId] },
       func: pageClickLabel,
       args: [elementId],
     });
@@ -277,8 +334,9 @@ async function handleRequest(msg) {
 
   if (action === 'type') {
     const tabId = await getCurrentTabId();
+    const frameId = resolveFrameId(tabId, elementId);
     const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId },
+      target: { tabId, frameIds: [frameId] },
       func: pageTypeLabel,
       args: [elementId, text],
     });
