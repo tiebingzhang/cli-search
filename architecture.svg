@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1020 200" width="1020" height="200">
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto" fill="#6b7280">
+      <polygon points="0 0, 10 3.5, 0 7" />
+    </marker>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+    <linearGradient id="cliGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="daemonGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="wsGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="extGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="tabGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+  </defs>
+
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+
+  <!-- Background -->
+  <rect width="1020" height="200" rx="12" fill="#f8fafc"/>
+
+  <!-- Node: CLI (search-cli) -->
+  <rect x="20" y="55" width="120" height="90" rx="12" fill="url(#cliGrad)" filter="url(#shadow)"/>
+  <text x="80" y="90" text-anchor="middle" fill="white" font-size="15" font-weight="600">CLI</text>
+  <text x="80" y="112" text-anchor="middle" fill="white" font-size="12">(search-cli)</text>
+
+  <!-- Arrow: CLI → Unix socket -->
+  <line x1="140" y1="100" x2="240" y2="100" stroke="#6b7280" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="190" y="88" text-anchor="middle" fill="#6b7280" font-size="11">Unix socket</text>
+
+  <!-- Node: Node daemon -->
+  <rect x="260" y="55" width="120" height="90" rx="12" fill="url(#daemonGrad)" filter="url(#shadow)"/>
+  <text x="320" y="90" text-anchor="middle" fill="white" font-size="15" font-weight="600">Node</text>
+  <text x="320" y="112" text-anchor="middle" fill="white" font-size="12">daemon</text>
+
+  <!-- Arrow: daemon → WebSocket -->
+  <line x1="380" y1="100" x2="480" y2="100" stroke="#6b7280" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <text x="430" y="88" text-anchor="middle" fill="#6b7280" font-size="11">WebSocket</text>
+
+  <!-- Node: Chrome Extension & Browser Tabs -->
+  <rect x="500" y="55" width="500" height="90" rx="12" fill="url(#extGrad)" filter="url(#shadow)"/>
+  <text x="750" y="90" text-anchor="middle" fill="white" font-size="15" font-weight="600">Chrome Extension → Browser Tabs</text>
+  <text x="750" y="112" text-anchor="middle" fill="white" font-size="12">Google, DuckDuckGo, etc.</text>
+
+  <!-- Title -->
+  <text x="510" y="30" text-anchor="middle" fill="#1e293b" font-size="18" font-weight="700">Architecture Overview</text>
+</svg>

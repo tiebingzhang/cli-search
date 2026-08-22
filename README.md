@@ -51,9 +51,7 @@ npm install
 
 ## Architecture
 
-```
-CLI (search-cli) → Unix socket → Node daemon → WebSocket → Chrome extension → Browser tabs
-```
+![Architecture Overview](architecture.svg)
 
 The CLI spawns a background daemon that maintains a WebSocket connection to the Chrome extension. All browser operations (tab creation, page content extraction, element interaction) happen inside the extension.
 
