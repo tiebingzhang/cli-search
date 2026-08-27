@@ -114,9 +114,12 @@ commands:
   google <query>            search Google and return page text
   ddg <query>               search DuckDuckGo and return page text
   visit <url>               open a URL and return page text
+  attach                    target the browser's current active tab for later commands
   snapshot                  label clickable/input elements on the current tab, print their IDs
   click <ID>                click the element with the given snapshot ID
   type <ID> <text>          type text into the input with the given snapshot ID
+  readdropdown <ID>         list every option of an open dropdown/select, scrolling if needed
+  selectoption <ID> <value> choose an option on a native <select> by value, index, or text
   screenshot [path]         save a PNG of the current tab's visible viewport
 
 options (google/ddg/visit only):
@@ -142,6 +145,12 @@ async function main() {
   }
   if (action === 'status') {
     await statusDaemon();
+    return;
+  }
+
+  if (action === 'attach') {
+    const res = await sendRequest({ action: 'attach' });
+    console.log(`attached to tab ${res.tabId}: ${res.title || res.url}`);
     return;
   }
 
@@ -174,6 +183,29 @@ async function main() {
     return;
   }
 
+  if (action === 'readdropdown') {
+    const [elementId] = rest;
+    if (!elementId) {
+      console.error('usage: search-cli readdropdown <ID>');
+      process.exit(1);
+    }
+    const res = await sendRequest({ action: 'readdropdown', elementId });
+    process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+    return;
+  }
+
+  if (action === 'selectoption') {
+    const [elementId, ...valueParts] = rest;
+    const value = valueParts.join(' ');
+    if (!elementId || !value) {
+      console.error('usage: search-cli selectoption <ID> <value>');
+      process.exit(1);
+    }
+    const res = await sendRequest({ action: 'selectoption', elementId, value });
+    console.log(`selected "${res.text}" (${res.value}) on ${elementId}`);
+    return;
+  }
+
   if (action === 'screenshot') {
     const [outPath] = rest;
     const dest = outPath || path.join(os.tmpdir(), `screenshot-${process.pid}.png`);
@@ -185,7 +217,7 @@ async function main() {
 
   if (!['google', 'ddg', 'visit'].includes(action)) {
     console.error(
-      'usage: search-cli <start|stop|status|google|ddg|visit|snapshot|click|type|screenshot> [args] [--wait=ms] [--links]'
+      'usage: search-cli <start|stop|status|google|ddg|visit|attach|snapshot|click|type|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links]'
     );
     process.exit(1);
   }

@@ -12,7 +12,28 @@ async function getReuseTabId() {
 }
 
 async function setReuseTabId(tabId) {
+  const prev = await getReuseTabId();
+  if (prev !== null && prev !== tabId) {
+    try {
+      await chrome.tabs.ungroup(prev);
+    } catch (e) {}
+  }
   await chrome.storage.session.set({ reuseTabId: tabId });
+  if (typeof tabId === 'number') {
+    try {
+      const groupId = await chrome.tabs.group({ tabIds: [tabId] });
+      await chrome.tabGroups.update(groupId, { color: 'blue', title: 'CLI' });
+    } catch (e) {}
+  }
+}
+
+async function refreshAttachedGroup() {
+  const tabId = await getReuseTabId();
+  if (typeof tabId !== 'number') return;
+  try {
+    const groupId = await chrome.tabs.group({ tabIds: [tabId] });
+    await chrome.tabGroups.update(groupId, { color: 'blue', title: 'CLI' });
+  } catch (e) {}
 }
 
 function setConnected(isConnected) {
@@ -57,6 +78,7 @@ function connect() {
 }
 
 connect();
+refreshAttachedGroup();
 
 chrome.alarms.create('reconnect', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(() => connect());
@@ -238,7 +260,15 @@ function pageClickLabel(id) {
   const el = window.__cliLabels && window.__cliLabels[id];
   if (!el) return { ok: false, error: `unknown element id: ${id}` };
   el.scrollIntoView({ block: 'center', inline: 'center' });
-  el.click();
+  const rect = el.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const base = { bubbles: true, cancelable: true, composed: true, view: window, clientX: cx, clientY: cy, button: 0 };
+  el.dispatchEvent(new PointerEvent('pointerdown', { ...base, pointerId: 1, isPrimary: true }));
+  el.dispatchEvent(new MouseEvent('mousedown', base));
+  el.dispatchEvent(new PointerEvent('pointerup', { ...base, pointerId: 1, isPrimary: true }));
+  el.dispatchEvent(new MouseEvent('mouseup', base));
+  el.dispatchEvent(new MouseEvent('click', base));
   return { ok: true };
 }
 
@@ -264,6 +294,122 @@ function pageTypeLabel(id, text) {
   return { ok: true };
 }
 
+async function pageReadDropdown(id, framePrefix) {
+  const labels = window.__cliLabels || (window.__cliLabels = {});
+  const el = labels[id];
+  if (!el) return { ok: false, error: `unknown element id: ${id}` };
+
+  const CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  function makeId(i) {
+    return (framePrefix || '') + CHARS[Math.floor(i / 36) % 36] + CHARS[i % 36];
+  }
+  let next = 0;
+  function assign(node) {
+    while (labels[makeId(next)] && labels[makeId(next)] !== node) next++;
+    const nid = makeId(next);
+    labels[nid] = node;
+    next++;
+    return nid;
+  }
+
+  if (el.tagName.toLowerCase() === 'select') {
+    const options = Array.from(el.options).map((o, idx) => ({
+      index: idx,
+      value: o.value,
+      text: (o.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120),
+      selected: o.selected,
+    }));
+    return { ok: true, kind: 'select', options };
+  }
+
+  // Resolve the option container for an ARIA / overflow / virtualized dropdown.
+  function isVisible(node) {
+    const s = getComputedStyle(node);
+    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+    const r = node.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+  const optionSelector =
+    '[role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], li, option';
+  let container = null;
+  const role = el.getAttribute('role');
+  if ((role === 'listbox' || role === 'menu') || el.querySelector(optionSelector)) {
+    container = el;
+  }
+  if (!container) {
+    const owns = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+    if (owns) container = document.getElementById(owns);
+  }
+  if (!container) {
+    const found = Array.from(document.querySelectorAll('[role="listbox"], [role="menu"]')).filter(isVisible);
+    container = found[found.length - 1] || el;
+  }
+
+  // Pick the scrollable element (container or a descendant that overflows).
+  let scrollEl = null;
+  if (container.scrollHeight > container.clientHeight + 1) {
+    scrollEl = container;
+  } else {
+    scrollEl =
+      Array.from(container.querySelectorAll('*')).find((n) => n.scrollHeight > n.clientHeight + 1) || null;
+  }
+
+  const seenKeys = new Set();
+  const options = [];
+  function harvest() {
+    container.querySelectorAll(optionSelector).forEach((node) => {
+      if (!isVisible(node)) return;
+      const text = (node.innerText || node.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+      const key = node.getAttribute('data-value') || node.id || text;
+      if (!text || seenKeys.has(key)) return;
+      seenKeys.add(key);
+      options.push({
+        id: assign(node),
+        text,
+        selected: node.getAttribute('aria-selected') === 'true' || node.getAttribute('aria-checked') === 'true',
+      });
+    });
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (scrollEl) {
+    scrollEl.scrollTop = 0;
+    await sleep(60);
+    harvest();
+    let last = -1;
+    let guard = 0;
+    while (scrollEl.scrollTop !== last && guard < 300) {
+      last = scrollEl.scrollTop;
+      scrollEl.scrollTop += scrollEl.clientHeight;
+      await sleep(60);
+      harvest();
+      guard++;
+      if (scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight) break;
+    }
+  } else {
+    harvest();
+  }
+
+  return { ok: true, kind: 'listbox', options };
+}
+
+function pageSelectOption(id, value) {
+  const el = window.__cliLabels && window.__cliLabels[id];
+  if (!el) return { ok: false, error: `unknown element id: ${id}` };
+  if (el.tagName.toLowerCase() !== 'select') {
+    return { ok: false, error: `element ${id} (<${el.tagName.toLowerCase()}>) is not a <select>` };
+  }
+  const opts = Array.from(el.options);
+  let target = opts.find((o) => o.value === value);
+  if (!target && /^\d+$/.test(value)) target = opts[parseInt(value, 10)];
+  if (!target) target = opts.find((o) => (o.textContent || '').trim() === value);
+  if (!target) return { ok: false, error: `no option matching "${value}"` };
+  el.value = target.value;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return { ok: true, value: target.value, text: (target.textContent || '').trim() };
+}
+
 // --- request dispatch ---
 
 function resolveFrameId(tabId, elementId) {
@@ -276,7 +422,7 @@ function resolveFrameId(tabId, elementId) {
 }
 
 async function handleRequest(msg) {
-  const { action, query, url, waitMs, links, elementId, text } = msg;
+  const { action, query, url, waitMs, links, elementId, text, value } = msg;
 
   if (action === 'google' || action === 'ddg' || action === 'visit') {
     const targetUrl = buildUrl(action, query, url);
@@ -294,6 +440,13 @@ async function handleRequest(msg) {
         : () => document.body.innerText,
     });
     return { text: result };
+  }
+
+  if (action === 'attach') {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab) throw new Error('no active tab in the focused window');
+    await setReuseTabId(tab.id);
+    return { tabId: tab.id, url: tab.url, title: tab.title };
   }
 
   if (action === 'snapshot') {
@@ -342,6 +495,32 @@ async function handleRequest(msg) {
     });
     if (!result.ok) throw new Error(result.error);
     return { ok: true };
+  }
+
+  if (action === 'readdropdown') {
+    const tabId = await getCurrentTabId();
+    const frameId = resolveFrameId(tabId, elementId);
+    const frameMap = frameMapsByTab.get(tabId);
+    const prefix = Object.prototype.hasOwnProperty.call(frameMap, '') ? '' : elementId[0];
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: pageReadDropdown,
+      args: [elementId, prefix],
+    });
+    if (!result.ok) throw new Error(result.error);
+    return { kind: result.kind, options: result.options };
+  }
+
+  if (action === 'selectoption') {
+    const tabId = await getCurrentTabId();
+    const frameId = resolveFrameId(tabId, elementId);
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: pageSelectOption,
+      args: [elementId, value],
+    });
+    if (!result.ok) throw new Error(result.error);
+    return { ok: true, value: result.value, text: result.text };
   }
 
   if (action === 'screenshot') {
