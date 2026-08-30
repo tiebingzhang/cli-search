@@ -119,9 +119,14 @@ commands:
   snapshot --context        print the page text with element IDs inlined in context
   click <ID>                click the element with the given snapshot ID
   type <ID> <text>          type text into the input with the given snapshot ID
+  type --focused <text>     type text into the currently focused input (no ID)
+                            add --force for non-standard/custom editable fields
+  type --label <label> <text> type into the field whose label matches (e.g. Subject)
+  fields                    list only the editable fields on the tab, with labels
   key <keys...> [--in <ID>] send keystrokes to the page (e.g. Enter, Ctrl+k, g i)
                             add --trusted for real key events (moves focus on Tab)
   clearlabels               remove the snapshot labels/overlay from the current tab
+  closetabs                 close every tab the tool has opened (the CLI tab group)
   readdropdown <ID>         list every option of an open dropdown/select, scrolling if needed
   selectoption <ID> <value> choose an option on a native <select> by value, index, or text
   screenshot [path]         save a PNG of the current tab's visible viewport
@@ -180,11 +185,43 @@ async function main() {
     return;
   }
 
+  if (action === 'fields') {
+    const res = await sendRequest({ action: 'fields' });
+    for (const f of res.fields) {
+      console.log(`${f.type.padEnd(10)} ${f.label || '(no label)'}`);
+    }
+    return;
+  }
+
   if (action === 'type') {
+    const li = rest.indexOf('--label');
+    if (li !== -1) {
+      const label = rest[li + 1];
+      const text = rest.slice(li + 2).join(' ');
+      if (!label || !text) {
+        console.error('usage: search-cli type --label <label> <text>');
+        process.exit(1);
+      }
+      const res = await sendRequest({ action: 'type', label, text });
+      console.log(`typed into "${res.matched}"`);
+      return;
+    }
+    const focused = rest.includes('--focused') || rest.includes('--force');
+    if (focused) {
+      const force = rest.includes('--force');
+      const text = rest.filter((t) => t !== '--focused' && t !== '--force').join(' ');
+      if (!text) {
+        console.error('usage: search-cli type --focused <text>  (add --force for non-standard fields)');
+        process.exit(1);
+      }
+      await sendRequest({ action: 'type', text, force });
+      console.log('typed into focused element');
+      return;
+    }
     const [elementId, ...textParts] = rest;
     const text = textParts.join(' ');
     if (!elementId || !text) {
-      console.error('usage: search-cli type <ID> <text>');
+      console.error('usage: search-cli type <ID> <text>  (or: type --focused <text>)');
       process.exit(1);
     }
     await sendRequest({ action: 'type', elementId, text });
@@ -217,6 +254,12 @@ async function main() {
   if (action === 'clearlabels') {
     await sendRequest({ action: 'clearlabels' });
     console.log('cleared snapshot labels');
+    return;
+  }
+
+  if (action === 'closetabs') {
+    const res = await sendRequest({ action: 'closetabs' });
+    console.log(`closed ${res.closed} tab(s)`);
     return;
   }
 
@@ -254,7 +297,7 @@ async function main() {
 
   if (!['google', 'ddg', 'visit'].includes(action)) {
     console.error(
-      'usage: search-cli <start|stop|status|google|ddg|visit|attach|snapshot|click|type|key|clearlabels|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links]'
+      'usage: search-cli <start|stop|status|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links]'
     );
     process.exit(1);
   }

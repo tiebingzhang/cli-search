@@ -10,8 +10,12 @@ It works by launching a local daemon that bridges the command line to a Chrome e
 - **Visit**: `search-cli visit "https://example.com"` — fetch page content from any URL
 - **Snapshot**: `search-cli snapshot` — label interactive elements on the current tab with IDs, or `snapshot --context` to print the page text with those IDs inlined in place
 - **Interact**: `search-cli click <ID>` and `search-cli type <ID> "text"` — click elements and type into inputs
+- **Fields**: `search-cli fields` — list only the editable fields on the tab, with labels
+- **Type by label**: `search-cli type --label Subject "text"` — type into a field by its label, no ID needed
+- **Type into focus**: `search-cli type --focused "text"` — type into whatever input is focused (add `--force` for custom fields)
 - **Keystrokes**: `search-cli key <keys...>` — send keys to the page (add `--trusted` to move focus on Tab)
 - **Clear labels**: `search-cli clearlabels` — remove the snapshot overlay from the current tab
+- **Close tabs**: `search-cli closetabs` — close every tab the tool has opened
 - **Screenshot**: `search-cli screenshot` — capture the current tab as PNG
 
 ## Installation
@@ -51,6 +55,12 @@ npm install
 ./bin/search-cli.js type CD "hello world"
 ./bin/search-cli.js screenshot ~/Desktop/page.png
 
+# Fill form fields by label instead of hunting for IDs
+./bin/search-cli.js fields                                  # list the editable fields
+./bin/search-cli.js type --label "To recipients" "a@b.com"
+./bin/search-cli.js type --label Subject "hello there"
+./bin/search-cli.js type --focused "into whatever is focused"
+
 # Send keystrokes
 ./bin/search-cli.js key Enter
 ./bin/search-cli.js key Ctrl+k
@@ -58,9 +68,26 @@ npm install
 ./bin/search-cli.js key / --in AB        # focus element AB, then press /
 ./bin/search-cli.js key Tab --trusted    # real key event: actually moves focus
 
-# Remove the snapshot overlay
+# Remove the snapshot overlay / close the tool's tabs
 ./bin/search-cli.js clearlabels
+./bin/search-cli.js closetabs
 ```
+
+## Filling form fields
+
+Snapshots can list hundreds of elements, which makes finding a specific input
+tedious. Two commands target inputs directly:
+
+- `fields` lists only the editable fields (input, textarea, contenteditable,
+  `role=textbox`) with a label built from `aria-label`, `aria-labelledby`, the
+  associated `<label>`, `placeholder`, `name`, or `title`.
+- `type --label <label> <text>` types into the field whose label matches
+  (case-insensitive: exact, then starts-with, then contains). If nothing matches,
+  the error lists the available field labels. `type --focused <text>` types into
+  the currently focused input, and `--force` handles custom widgets by inserting
+  through `execCommand`.
+
+Both search every frame, so fields inside iframes are covered.
 
 ## Sending keystrokes
 

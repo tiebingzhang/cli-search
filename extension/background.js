@@ -471,6 +471,136 @@ function pageTypeLabel(id, text) {
   return { ok: true };
 }
 
+function pageTypeFocused(text) {
+  const el = document.activeElement;
+  if (!el || el === document.body) return { ok: false, error: 'no focused element' };
+  const tag = el.tagName.toLowerCase();
+  if (el.isContentEditable) {
+    el.textContent = '';
+    document.execCommand('insertText', false, text);
+  } else if (tag === 'input' || tag === 'textarea') {
+    const proto = tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    setter.call(el, '');
+    setter.call(el, text);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    return { ok: false, error: `focused element <${tag}> is not a text input` };
+  }
+  return { ok: true };
+}
+
+function pageTypeFocusedForce(text) {
+  const el = document.activeElement;
+  if (!el || el === document.body) return { ok: false, error: 'no focused element' };
+  el.focus();
+  const tag = el.tagName.toLowerCase();
+  let inserted = false;
+  try {
+    inserted = document.execCommand('insertText', false, text);
+  } catch (e) {}
+  if (!inserted && (tag === 'input' || tag === 'textarea')) {
+    const proto = tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    setter.call(el, text);
+    inserted = true;
+  }
+  if (!inserted && (el.isContentEditable || el.getAttribute('contenteditable') === 'true')) {
+    el.textContent = text;
+    inserted = true;
+  }
+  if (!inserted) return { ok: false, error: `cannot type into <${tag}>` };
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return { ok: true, tag };
+}
+
+// Shared, self-contained field helpers are inlined into the two functions below
+// because chrome.scripting.executeScript serializes each function in isolation.
+
+function pageListFields() {
+  function isVisible(el) {
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+  function labelFor(el) {
+    const p = [];
+    const a = el.getAttribute('aria-label');
+    if (a) p.push(a);
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) lb.split(/\s+/).forEach((id) => { const n = document.getElementById(id); if (n) p.push(n.textContent); });
+    if (el.labels) for (const l of el.labels) p.push(l.textContent);
+    if (el.placeholder) p.push(el.placeholder);
+    if (el.name) p.push(el.name);
+    if (el.title) p.push(el.title);
+    return p.join(' ').replace(/\s+/g, ' ').trim();
+  }
+  const sel =
+    'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=image]), textarea, [contenteditable=""], [contenteditable=true], [role=textbox]';
+  return Array.from(document.querySelectorAll(sel))
+    .filter(isVisible)
+    .map((el) => {
+      const tag = el.tagName.toLowerCase();
+      return { label: labelFor(el), type: tag === 'input' ? el.type || 'text' : tag };
+    });
+}
+
+function pageTypeByLabel(query, text) {
+  function isVisible(el) {
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+  function labelFor(el) {
+    const p = [];
+    const a = el.getAttribute('aria-label');
+    if (a) p.push(a);
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) lb.split(/\s+/).forEach((id) => { const n = document.getElementById(id); if (n) p.push(n.textContent); });
+    if (el.labels) for (const l of el.labels) p.push(l.textContent);
+    if (el.placeholder) p.push(el.placeholder);
+    if (el.name) p.push(el.name);
+    if (el.title) p.push(el.title);
+    return p.join(' ').replace(/\s+/g, ' ').trim();
+  }
+  const sel =
+    'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=image]), textarea, [contenteditable=""], [contenteditable=true], [role=textbox]';
+  const labeled = Array.from(document.querySelectorAll(sel))
+    .filter(isVisible)
+    .map((el) => ({ el, label: labelFor(el) }));
+  const q = query.toLowerCase();
+  const hit =
+    labeled.find((x) => x.label.toLowerCase() === q) ||
+    labeled.find((x) => x.label.toLowerCase().startsWith(q)) ||
+    labeled.find((x) => x.label.toLowerCase().includes(q));
+  if (!hit) {
+    return { ok: false, error: 'no field matched', fields: labeled.map((x) => x.label).filter(Boolean) };
+  }
+  const el = hit.el;
+  el.scrollIntoView({ block: 'center', inline: 'center' });
+  el.focus();
+  const tag = el.tagName.toLowerCase();
+  if (el.isContentEditable) {
+    el.textContent = '';
+    document.execCommand('insertText', false, text);
+  } else if (tag === 'input' || tag === 'textarea') {
+    const proto = tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    setter.call(el, '');
+    setter.call(el, text);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    document.execCommand('insertText', false, text);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  return { ok: true, matched: hit.label };
+}
+
 async function pageReadDropdown(id, framePrefix) {
   const labels = window.__cliLabels || (window.__cliLabels = {});
   const el = labels[id];
@@ -599,7 +729,7 @@ function resolveFrameId(tabId, elementId) {
 }
 
 async function handleRequest(msg) {
-  const { action, query, url, waitMs, links, context, elementId, text, value, chords, trusted } = msg;
+  const { action, query, url, waitMs, links, context, elementId, text, value, chords, trusted, force, label } = msg;
 
   if (action === 'google' || action === 'ddg' || action === 'visit') {
     const targetUrl = buildUrl(action, query, url);
@@ -674,8 +804,42 @@ async function handleRequest(msg) {
     return { ok: true };
   }
 
+  if (action === 'fields') {
+    const tabId = await getCurrentTabId();
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: pageListFields,
+    });
+    const fields = [];
+    for (const r of results) if (Array.isArray(r.result)) fields.push(...r.result);
+    return { fields };
+  }
+
   if (action === 'type') {
     const tabId = await getCurrentTabId();
+    if (label) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: pageTypeByLabel,
+        args: [label, text],
+      });
+      const outcomes = results.map((r) => r.result).filter(Boolean);
+      const hit = outcomes.find((r) => r.ok);
+      if (hit) return { ok: true, matched: hit.matched };
+      const available = [];
+      for (const o of outcomes) if (Array.isArray(o.fields)) available.push(...o.fields);
+      throw new Error(`no field matched "${label}". available: ${available.join(' | ') || '(none)'}`);
+    }
+    if (!elementId) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: force ? pageTypeFocusedForce : pageTypeFocused,
+        args: [text],
+      });
+      const hit = results.map((r) => r.result).find((r) => r && r.ok);
+      if (!hit) throw new Error('no focused text input');
+      return { ok: true };
+    }
     const frameId = resolveFrameId(tabId, elementId);
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
@@ -715,6 +879,28 @@ async function handleRequest(msg) {
     await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: pageClearLabels });
     frameMapsByTab.delete(tabId);
     return { ok: true };
+  }
+
+  if (action === 'closetabs') {
+    const ids = new Set();
+    const reuseTabId = await getReuseTabId();
+    if (typeof reuseTabId === 'number') ids.add(reuseTabId);
+    try {
+      const groups = await chrome.tabGroups.query({ title: 'CLI' });
+      for (const g of groups) {
+        const tabs = await chrome.tabs.query({ groupId: g.id });
+        for (const t of tabs) ids.add(t.id);
+      }
+    } catch (e) {}
+    const tabIds = [...ids];
+    if (tabIds.length) {
+      try {
+        await chrome.tabs.remove(tabIds);
+      } catch (e) {}
+    }
+    await chrome.storage.session.set({ reuseTabId: null });
+    frameMapsByTab.clear();
+    return { ok: true, closed: tabIds.length };
   }
 
   if (action === 'readdropdown') {
