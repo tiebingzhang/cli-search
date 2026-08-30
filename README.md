@@ -10,9 +10,11 @@ It works by launching a local daemon that bridges the command line to a Chrome e
 - **Visit**: `search-cli visit "https://example.com"` — fetch page content from any URL
 - **Snapshot**: `search-cli snapshot` — label interactive elements on the current tab with IDs, or `snapshot --context` to print the page text with those IDs inlined in place
 - **Interact**: `search-cli click <ID>` and `search-cli type <ID> "text"` — click elements and type into inputs
-- **Fields**: `search-cli fields` — list only the editable fields on the tab, with labels
+- **Fields**: `search-cli fields` — list the editable fields and dropdowns on the tab, with labels
 - **Type by label**: `search-cli type --label Subject "text"` — type into a field by its label, no ID needed
 - **Type into focus**: `search-cli type --focused "text"` — type into whatever input is focused (add `--force` for custom fields)
+- **Read dropdown**: `search-cli readdropdown <ID>` or `readdropdown --label <label>` — open a dropdown and list its options
+- **Select option**: `search-cli selectoption <ID> <value>` or `selectoption --label <label> <value>` — choose an option on a native `<select>`
 - **Keystrokes**: `search-cli key <keys...>` — send keys to the page (add `--trusted` to move focus on Tab)
 - **Clear labels**: `search-cli clearlabels` — remove the snapshot overlay from the current tab
 - **Close tabs**: `search-cli closetabs` — close every tab the tool has opened
@@ -56,10 +58,14 @@ npm install
 ./bin/search-cli.js screenshot ~/Desktop/page.png
 
 # Fill form fields by label instead of hunting for IDs
-./bin/search-cli.js fields                                  # list the editable fields
+./bin/search-cli.js fields                                  # list the editable fields and dropdowns
 ./bin/search-cli.js type --label "To recipients" "a@b.com"
 ./bin/search-cli.js type --label Subject "hello there"
 ./bin/search-cli.js type --focused "into whatever is focused"
+
+# Read and set dropdowns by label
+./bin/search-cli.js readdropdown --label "Intern season"       # open it and list options
+./bin/search-cli.js selectoption --label "Intern season" Fall  # choose an option on a <select>
 
 # Send keystrokes
 ./bin/search-cli.js key Enter
@@ -78,8 +84,9 @@ npm install
 Snapshots can list hundreds of elements, which makes finding a specific input
 tedious. Two commands target inputs directly:
 
-- `fields` lists only the editable fields (input, textarea, contenteditable,
-  `role=textbox`) with a label built from `aria-label`, `aria-labelledby`, the
+- `fields` lists the editable fields (input, textarea, contenteditable,
+  `role=textbox`) and dropdowns (`<select>`, `role=combobox`, `aria-haspopup`
+  listbox/menu) with a label built from `aria-label`, `aria-labelledby`, the
   associated `<label>`, `placeholder`, `name`, or `title`.
 - `type --label <label> <text>` types into the field whose label matches
   (case-insensitive: exact, then starts-with, then contains). If nothing matches,
@@ -88,6 +95,21 @@ tedious. Two commands target inputs directly:
   through `execCommand`.
 
 Both search every frame, so fields inside iframes are covered.
+
+## Dropdowns
+
+- `readdropdown <ID>` lists every option of a dropdown labelled by `snapshot`.
+  `readdropdown --label <label>` finds the dropdown by its `fields` label instead,
+  opens it (firing pointer, mouse, click, and `ArrowDown` events for custom
+  comboboxes), and lists the options, scrolling through virtualized lists. For a
+  native `<select>` it reads the options directly; for a custom combobox it
+  locates the popup even when it is portaled to `<body>`. Each option gets an ID
+  you can `click`. The result's `found` flag reports whether a real popup was
+  located.
+- `selectoption <ID> <value>` and `selectoption --label <label> <value>` choose an
+  option on a native `<select>` by value, index, or exact text. For a custom
+  combobox, use `readdropdown` to list options, then `click <ID>` on the one you
+  want.
 
 ## Sending keystrokes
 

@@ -122,13 +122,15 @@ commands:
   type --focused <text>     type text into the currently focused input (no ID)
                             add --force for non-standard/custom editable fields
   type --label <label> <text> type into the field whose label matches (e.g. Subject)
-  fields                    list only the editable fields on the tab, with labels
+  fields                    list only the editable fields and dropdowns on the tab, with labels
   key <keys...> [--in <ID>] send keystrokes to the page (e.g. Enter, Ctrl+k, g i)
                             add --trusted for real key events (moves focus on Tab)
   clearlabels               remove the snapshot labels/overlay from the current tab
   closetabs                 close every tab the tool has opened (the CLI tab group)
   readdropdown <ID>         list every option of an open dropdown/select, scrolling if needed
+  readdropdown --label <label> open the dropdown whose label matches and list its options
   selectoption <ID> <value> choose an option on a native <select> by value, index, or text
+  selectoption --label <label> <value> choose an option on the <select> whose label matches
   screenshot [path]         save a PNG of the current tab's visible viewport
 
 options (google/ddg/visit only):
@@ -264,9 +266,20 @@ async function main() {
   }
 
   if (action === 'readdropdown') {
+    const li = rest.indexOf('--label');
+    if (li !== -1) {
+      const label = rest.slice(li + 1).join(' ');
+      if (!label) {
+        console.error('usage: search-cli readdropdown --label <label>');
+        process.exit(1);
+      }
+      const res = await sendRequest({ action: 'readdropdown', label });
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+      return;
+    }
     const [elementId] = rest;
     if (!elementId) {
-      console.error('usage: search-cli readdropdown <ID>');
+      console.error('usage: search-cli readdropdown <ID>  (or: readdropdown --label <label>)');
       process.exit(1);
     }
     const res = await sendRequest({ action: 'readdropdown', elementId });
@@ -275,10 +288,22 @@ async function main() {
   }
 
   if (action === 'selectoption') {
+    const li = rest.indexOf('--label');
+    if (li !== -1) {
+      const label = rest[li + 1];
+      const value = rest.slice(li + 2).join(' ');
+      if (!label || !value) {
+        console.error('usage: search-cli selectoption --label <label> <value>');
+        process.exit(1);
+      }
+      const res = await sendRequest({ action: 'selectoption', label, value });
+      console.log(`selected "${res.text}" (${res.value}) on "${res.matched}"`);
+      return;
+    }
     const [elementId, ...valueParts] = rest;
     const value = valueParts.join(' ');
     if (!elementId || !value) {
-      console.error('usage: search-cli selectoption <ID> <value>');
+      console.error('usage: search-cli selectoption <ID> <value>  (or: selectoption --label <label> <value>)');
       process.exit(1);
     }
     const res = await sendRequest({ action: 'selectoption', elementId, value });

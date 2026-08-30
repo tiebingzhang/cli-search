@@ -539,12 +539,17 @@ function pageListFields() {
     return p.join(' ').replace(/\s+/g, ' ').trim();
   }
   const sel =
-    'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=image]), textarea, [contenteditable=""], [contenteditable=true], [role=textbox]';
+    'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=image]), textarea, [contenteditable=""], [contenteditable=true], [role=textbox], select, [role="combobox"], [aria-haspopup="listbox"], [aria-haspopup="menu"]';
   return Array.from(document.querySelectorAll(sel))
     .filter(isVisible)
     .map((el) => {
       const tag = el.tagName.toLowerCase();
-      return { label: labelFor(el), type: tag === 'input' ? el.type || 'text' : tag };
+      let type;
+      if (tag === 'select') type = 'select';
+      else if (tag === 'input') type = el.type || 'text';
+      else if (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup')) type = 'combobox';
+      else type = tag;
+      return { label: labelFor(el), type };
     });
 }
 
@@ -599,6 +604,165 @@ function pageTypeByLabel(query, text) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
   }
   return { ok: true, matched: hit.label };
+}
+
+async function pageReadDropdownByLabel(query, framePrefix) {
+  const labels = window.__cliLabels || (window.__cliLabels = {});
+  function isVisible(node) {
+    const s = getComputedStyle(node);
+    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+    const r = node.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+  function labelFor(el) {
+    const p = [];
+    const a = el.getAttribute('aria-label');
+    if (a) p.push(a);
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) lb.split(/\s+/).forEach((id) => { const n = document.getElementById(id); if (n) p.push(n.textContent); });
+    if (el.labels) for (const l of el.labels) p.push(l.textContent);
+    if (el.placeholder) p.push(el.placeholder);
+    if (el.name) p.push(el.name);
+    if (el.title) p.push(el.title);
+    return p.join(' ').replace(/\s+/g, ' ').trim();
+  }
+  const fieldSel =
+    'select, [role="combobox"], [role="listbox"], [aria-haspopup="listbox"], [aria-haspopup="menu"], [aria-haspopup="true"], [aria-expanded], input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=image]), textarea, [role="textbox"]';
+  const labeled = Array.from(document.querySelectorAll(fieldSel))
+    .filter(isVisible)
+    .map((el) => ({ el, label: labelFor(el) }));
+  const q = query.toLowerCase();
+  const hit =
+    labeled.find((x) => x.label.toLowerCase() === q) ||
+    labeled.find((x) => x.label.toLowerCase().startsWith(q)) ||
+    labeled.find((x) => x.label.toLowerCase().includes(q));
+  if (!hit) {
+    return { ok: false, error: 'no dropdown matched', fields: labeled.map((x) => x.label).filter(Boolean) };
+  }
+  const el = hit.el;
+
+  const CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  function makeId(i) {
+    return (framePrefix || '') + CHARS[Math.floor(i / 36) % 36] + CHARS[i % 36];
+  }
+  let next = 0;
+  function assign(node) {
+    while (labels[makeId(next)] && labels[makeId(next)] !== node) next++;
+    const nid = makeId(next);
+    labels[nid] = node;
+    next++;
+    return nid;
+  }
+
+  if (el.tagName.toLowerCase() === 'select') {
+    const options = Array.from(el.options).map((o, idx) => ({
+      index: idx,
+      value: o.value,
+      text: (o.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120),
+      selected: o.selected,
+    }));
+    return { ok: true, kind: 'select', matched: hit.label, options };
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const optionSelector =
+    '[role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], li, option';
+  const roleOptionSel =
+    '[role="option"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]';
+
+  function commonAncestor(nodes) {
+    let a = nodes[0];
+    for (let i = 1; i < nodes.length && a; i++) {
+      while (a && !a.contains(nodes[i])) a = a.parentElement;
+    }
+    return a || document.body;
+  }
+
+  // Find the popup that holds the options. Custom comboboxes often portal the
+  // listbox to <body>, so fall back to any visible role-based option nodes.
+  function detect() {
+    const role = el.getAttribute('role');
+    if ((role === 'listbox' || role === 'menu') || el.querySelector(optionSelector)) {
+      return { container: el, sel: optionSelector };
+    }
+    const owns = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+    if (owns) {
+      const c = document.getElementById(owns);
+      if (c && isVisible(c) && c.querySelector(optionSelector)) return { container: c, sel: optionSelector };
+    }
+    const lists = Array.from(document.querySelectorAll('[role="listbox"], [role="menu"]'))
+      .filter((c) => isVisible(c) && c !== el && c.querySelector(optionSelector));
+    if (lists.length) return { container: lists[lists.length - 1], sel: optionSelector };
+    const roleNodes = Array.from(document.querySelectorAll(roleOptionSel)).filter(isVisible);
+    if (roleNodes.length) return { container: commonAncestor(roleNodes), sel: roleOptionSel };
+    return null;
+  }
+
+  el.scrollIntoView({ block: 'center', inline: 'center' });
+  function fireOpen() {
+    for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      try { el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+    }
+    try { el.focus(); } catch (e) {}
+    for (const key of ['ArrowDown']) {
+      try { el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, code: key })); } catch (e) {}
+    }
+    try { el.click(); } catch (e) {}
+  }
+  fireOpen();
+  let found = detect();
+  for (let i = 0; i < 8 && !found; i++) {
+    await sleep(80);
+    if (i === 3) fireOpen();
+    found = detect();
+  }
+  const container = found ? found.container : el;
+  const harvestSel = found ? found.sel : optionSelector;
+
+  let scrollEl = null;
+  if (container.scrollHeight > container.clientHeight + 1) {
+    scrollEl = container;
+  } else {
+    scrollEl =
+      Array.from(container.querySelectorAll('*')).find((n) => n.scrollHeight > n.clientHeight + 1) || null;
+  }
+
+  const seenKeys = new Set();
+  const options = [];
+  function harvest() {
+    container.querySelectorAll(harvestSel).forEach((node) => {
+      if (!isVisible(node)) return;
+      const text = (node.innerText || node.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+      const key = node.getAttribute('data-value') || node.id || text;
+      if (!text || seenKeys.has(key)) return;
+      seenKeys.add(key);
+      options.push({
+        id: assign(node),
+        text,
+        selected: node.getAttribute('aria-selected') === 'true' || node.getAttribute('aria-checked') === 'true',
+      });
+    });
+  }
+
+  if (scrollEl) {
+    scrollEl.scrollTop = 0;
+    await sleep(60);
+    harvest();
+    let last = -1;
+    let guard = 0;
+    while (scrollEl.scrollTop !== last && guard < 300) {
+      last = scrollEl.scrollTop;
+      scrollEl.scrollTop += scrollEl.clientHeight;
+      await sleep(60);
+      harvest();
+      guard++;
+      if (scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight) break;
+    }
+  } else {
+    harvest();
+  }
+
+  return { ok: true, kind: 'listbox', matched: hit.label, found: !!found, options };
 }
 
 async function pageReadDropdown(id, framePrefix) {
@@ -715,6 +879,53 @@ function pageSelectOption(id, value) {
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
   return { ok: true, value: target.value, text: (target.textContent || '').trim() };
+}
+
+function pageSelectOptionByLabel(query, value) {
+  function isVisible(node) {
+    const s = getComputedStyle(node);
+    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+    const r = node.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+  function labelFor(el) {
+    const p = [];
+    const a = el.getAttribute('aria-label');
+    if (a) p.push(a);
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) lb.split(/\s+/).forEach((id) => { const n = document.getElementById(id); if (n) p.push(n.textContent); });
+    if (el.labels) for (const l of el.labels) p.push(l.textContent);
+    if (el.placeholder) p.push(el.placeholder);
+    if (el.name) p.push(el.name);
+    if (el.title) p.push(el.title);
+    return p.join(' ').replace(/\s+/g, ' ').trim();
+  }
+  const fieldSel =
+    'select, [role="combobox"], [aria-haspopup="listbox"], [aria-haspopup="menu"], input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=image]), textarea, [role="textbox"]';
+  const labeled = Array.from(document.querySelectorAll(fieldSel))
+    .filter(isVisible)
+    .map((el) => ({ el, label: labelFor(el) }));
+  const q = query.toLowerCase();
+  const hit =
+    labeled.find((x) => x.label.toLowerCase() === q) ||
+    labeled.find((x) => x.label.toLowerCase().startsWith(q)) ||
+    labeled.find((x) => x.label.toLowerCase().includes(q));
+  if (!hit) {
+    return { ok: false, error: 'no dropdown matched', fields: labeled.map((x) => x.label).filter(Boolean) };
+  }
+  const el = hit.el;
+  if (el.tagName.toLowerCase() !== 'select') {
+    return { ok: false, error: `"${hit.label}" (<${el.tagName.toLowerCase()}>) is not a <select>` };
+  }
+  const opts = Array.from(el.options);
+  let target = opts.find((o) => o.value === value);
+  if (!target && /^\d+$/.test(value)) target = opts[parseInt(value, 10)];
+  if (!target) target = opts.find((o) => (o.textContent || '').trim() === value);
+  if (!target) return { ok: false, error: `no option matching "${value}"` };
+  el.value = target.value;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return { ok: true, matched: hit.label, value: target.value, text: (target.textContent || '').trim() };
 }
 
 // --- request dispatch ---
@@ -905,6 +1116,25 @@ async function handleRequest(msg) {
 
   if (action === 'readdropdown') {
     const tabId = await getCurrentTabId();
+    if (label) {
+      const discovery = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: () => true });
+      const frameMap = {};
+      const results = await Promise.all(
+        discovery.map((frame, i) => {
+          const prefix = discovery.length > 1 ? FRAME_CHARS[i % FRAME_CHARS.length] : '';
+          frameMap[prefix] = frame.frameId;
+          return chrome.scripting
+            .executeScript({ target: { tabId, frameIds: [frame.frameId] }, func: pageReadDropdownByLabel, args: [label, prefix] })
+            .then(([r]) => r.result);
+        })
+      );
+      frameMapsByTab.set(tabId, frameMap);
+      const hit = results.find((r) => r && r.ok);
+      if (hit) return { kind: hit.kind, matched: hit.matched, found: hit.found, options: hit.options };
+      const available = [];
+      for (const r of results) if (r && Array.isArray(r.fields)) available.push(...r.fields);
+      throw new Error(`no dropdown matched "${label}". available: ${available.join(' | ') || '(none)'}`);
+    }
     const frameId = resolveFrameId(tabId, elementId);
     const frameMap = frameMapsByTab.get(tabId);
     const prefix = Object.prototype.hasOwnProperty.call(frameMap, '') ? '' : elementId[0];
@@ -919,6 +1149,21 @@ async function handleRequest(msg) {
 
   if (action === 'selectoption') {
     const tabId = await getCurrentTabId();
+    if (label) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: pageSelectOptionByLabel,
+        args: [label, value],
+      });
+      const outcomes = results.map((r) => r.result).filter(Boolean);
+      const hit = outcomes.find((r) => r.ok);
+      if (hit) return { ok: true, matched: hit.matched, value: hit.value, text: hit.text };
+      const withFields = outcomes.find((r) => Array.isArray(r.fields));
+      const notSelect = outcomes.find((r) => r.error && r.error.includes('is not a <select>'));
+      if (notSelect) throw new Error(notSelect.error);
+      const available = withFields ? withFields.fields : [];
+      throw new Error(`no dropdown matched "${label}". available: ${available.join(' | ') || '(none)'}`);
+    }
     const frameId = resolveFrameId(tabId, elementId);
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
