@@ -116,6 +116,7 @@ commands:
   visit <url>               open a URL and return page text
   attach                    target the browser's current active tab for later commands
   snapshot                  label clickable/input elements on the current tab, print their IDs
+  snapshot --context        print the page text with element IDs inlined in context
   click <ID>                click the element with the given snapshot ID
   type <ID> <text>          type text into the input with the given snapshot ID
   readdropdown <ID>         list every option of an open dropdown/select, scrolling if needed
@@ -155,8 +156,13 @@ async function main() {
   }
 
   if (action === 'snapshot') {
-    const res = await sendRequest({ action: 'snapshot' });
-    process.stdout.write(JSON.stringify(res.elements, null, 2) + '\n');
+    const context = rest.includes('--context');
+    const res = await sendRequest({ action: 'snapshot', context });
+    if (context) {
+      process.stdout.write(res.text + '\n');
+    } else {
+      process.stdout.write(JSON.stringify(res.elements, null, 2) + '\n');
+    }
     return;
   }
 

@@ -212,6 +212,7 @@ function pageLabelElements(framePrefix) {
     if (i >= 1296) break;
     const id = idFor(i);
     window.__cliLabels[id] = el;
+    el.dataset.cliId = id;
 
     const rect = el.getBoundingClientRect();
     const top = rect.top + window.scrollY;
@@ -254,6 +255,30 @@ function pageLabelElements(framePrefix) {
     i++;
   }
   return elements;
+}
+
+function pageContextText() {
+  const markers = [];
+  document.querySelectorAll('[data-cli-id]').forEach((el) => {
+    const id = el.getAttribute('data-cli-id');
+    const tag = el.tagName.toLowerCase();
+    let info = id;
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+      const label = (el.getAttribute('aria-label') || el.placeholder || el.name || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .slice(0, 60);
+      info = `${id}:${el.type || tag}${label ? ' ' + label : ''}`;
+    }
+    const m = document.createElement('span');
+    m.className = '__cli_marker__';
+    m.textContent = ` ⟦${info}⟧ `;
+    el.parentNode.insertBefore(m, el);
+    markers.push(m);
+  });
+  const text = document.body.innerText;
+  markers.forEach((m) => m.remove());
+  return text;
 }
 
 function pageClickLabel(id) {
@@ -422,14 +447,14 @@ function resolveFrameId(tabId, elementId) {
 }
 
 async function handleRequest(msg) {
-  const { action, query, url, waitMs, links, elementId, text, value } = msg;
+  const { action, query, url, waitMs, links, context, elementId, text, value } = msg;
 
   if (action === 'google' || action === 'ddg' || action === 'visit') {
     const targetUrl = buildUrl(action, query, url);
     const tabId = await getOrCreateTab(targetUrl);
     await new Promise((r) => setTimeout(r, typeof waitMs === 'number' ? waitMs : 1000));
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId },
+    const frames = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
       func: links
         ? () =>
             Array.from(document.querySelectorAll('a[href]'))
@@ -439,7 +464,7 @@ async function handleRequest(msg) {
               .join('\n')
         : () => document.body.innerText,
     });
-    return { text: result };
+    return { text: frames.map((f) => f.result).filter(Boolean).join('\n') };
   }
 
   if (action === 'attach') {
@@ -470,6 +495,18 @@ async function handleRequest(msg) {
       elements.push(...result);
     }
     frameMapsByTab.set(tabId, frameMap);
+    if (context) {
+      const textFrames = await Promise.all(
+        discovery.map((frame) =>
+          chrome.scripting.executeScript({
+            target: { tabId, frameIds: [frame.frameId] },
+            func: pageContextText,
+          })
+        )
+      );
+      const contextText = textFrames.map(([{ result }]) => result).filter(Boolean).join('\n');
+      return { elements, text: contextText };
+    }
     return { elements };
   }
 

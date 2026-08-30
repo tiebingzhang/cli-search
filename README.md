@@ -8,7 +8,7 @@ It works by launching a local daemon that bridges the command line to a Chrome e
 
 - **Search**: `search-cli google "query"` and `search-cli ddg "query"` — run searches and get page text
 - **Visit**: `search-cli visit "https://example.com"` — fetch page content from any URL
-- **Snapshot**: `search-cli snapshot` — label interactive elements on the current tab with IDs
+- **Snapshot**: `search-cli snapshot` — label interactive elements on the current tab with IDs, or `snapshot --context` to print the page text with those IDs inlined in place
 - **Interact**: `search-cli click <ID>` and `search-cli type <ID> "text"` — click elements and type into inputs
 - **Screenshot**: `search-cli screenshot` — capture the current tab as PNG
 
@@ -44,6 +44,7 @@ npm install
 
 # Interact with the current tab
 ./bin/search-cli.js snapshot
+./bin/search-cli.js snapshot --context
 ./bin/search-cli.js click AB
 ./bin/search-cli.js type CD "hello world"
 ./bin/search-cli.js screenshot ~/Desktop/page.png
