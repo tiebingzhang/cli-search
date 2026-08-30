@@ -8,6 +8,6 @@
   "action": {
     "default_title": "CLI Browser Search Bridge"
   },
-  "permissions": ["tabs", "tabGroups", "scripting", "alarms", "storage"],
+  "permissions": ["tabs", "tabGroups", "scripting", "alarms", "storage", "debugger"],
   "host_permissions": ["<all_urls>"]
 }

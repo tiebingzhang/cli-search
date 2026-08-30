@@ -119,6 +119,9 @@ commands:
   snapshot --context        print the page text with element IDs inlined in context
   click <ID>                click the element with the given snapshot ID
   type <ID> <text>          type text into the input with the given snapshot ID
+  key <keys...> [--in <ID>] send keystrokes to the page (e.g. Enter, Ctrl+k, g i)
+                            add --trusted for real key events (moves focus on Tab)
+  clearlabels               remove the snapshot labels/overlay from the current tab
   readdropdown <ID>         list every option of an open dropdown/select, scrolling if needed
   selectoption <ID> <value> choose an option on a native <select> by value, index, or text
   screenshot [path]         save a PNG of the current tab's visible viewport
@@ -189,6 +192,34 @@ async function main() {
     return;
   }
 
+  if (action === 'key') {
+    const chords = [];
+    let elementId;
+    let trusted = false;
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === '--in') {
+        elementId = rest[++i];
+      } else if (rest[i] === '--trusted') {
+        trusted = true;
+      } else {
+        chords.push(rest[i]);
+      }
+    }
+    if (!chords.length) {
+      console.error('usage: search-cli key <keys...> [--in <ID>] [--trusted]   e.g. key Enter, key Ctrl+k, key Tab --trusted');
+      process.exit(1);
+    }
+    const res = await sendRequest({ action: 'key', chords, elementId, trusted });
+    console.log(`sent ${res.count} key event(s)`);
+    return;
+  }
+
+  if (action === 'clearlabels') {
+    await sendRequest({ action: 'clearlabels' });
+    console.log('cleared snapshot labels');
+    return;
+  }
+
   if (action === 'readdropdown') {
     const [elementId] = rest;
     if (!elementId) {
@@ -223,7 +254,7 @@ async function main() {
 
   if (!['google', 'ddg', 'visit'].includes(action)) {
     console.error(
-      'usage: search-cli <start|stop|status|google|ddg|visit|attach|snapshot|click|type|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links]'
+      'usage: search-cli <start|stop|status|google|ddg|visit|attach|snapshot|click|type|key|clearlabels|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links]'
     );
     process.exit(1);
   }

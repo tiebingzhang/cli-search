@@ -6,6 +6,84 @@ let socket = null;
 const frameMapsByTab = new Map();
 const FRAME_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
+// Named keys for the trusted (chrome.debugger / CDP) key path.
+const CDP_KEYS = {
+  enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
+  tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
+  escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
+  esc: { key: 'Escape', code: 'Escape', keyCode: 27 },
+  backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
+  delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
+  space: { key: ' ', code: 'Space', keyCode: 32, text: ' ' },
+  up: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+  arrowup: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+  down: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+  arrowdown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+  left: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+  arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+  right: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+  arrowright: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+  home: { key: 'Home', code: 'Home', keyCode: 36 },
+  end: { key: 'End', code: 'End', keyCode: 35 },
+  pageup: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
+  pagedown: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
+};
+
+function parseChordCdp(chord) {
+  const parts = chord.split('+');
+  const keyPart = parts.pop();
+  let modifiers = 0;
+  for (const p of parts) {
+    const m = p.toLowerCase();
+    if (m === 'ctrl' || m === 'control') modifiers |= 2;
+    else if (m === 'shift') modifiers |= 8;
+    else if (m === 'alt' || m === 'option') modifiers |= 1;
+    else if (m === 'meta' || m === 'cmd' || m === 'command' || m === 'win') modifiers |= 4;
+  }
+  const lower = keyPart.toLowerCase();
+  let info;
+  if (CDP_KEYS[lower]) {
+    info = { ...CDP_KEYS[lower] };
+  } else if (keyPart.length === 1) {
+    const shift = (modifiers & 8) !== 0;
+    const isAlpha = /[a-z]/i.test(keyPart);
+    const key = isAlpha ? (shift ? keyPart.toUpperCase() : keyPart.toLowerCase()) : keyPart;
+    const code = isAlpha ? 'Key' + keyPart.toUpperCase() : /[0-9]/.test(keyPart) ? 'Digit' + keyPart : '';
+    info = { key, code, keyCode: keyPart.toUpperCase().charCodeAt(0), text: key };
+  } else {
+    info = { key: keyPart, code: '', keyCode: 0 };
+  }
+  // Ctrl/Meta shortcuts should not insert text.
+  if (modifiers & 2 || modifiers & 4) delete info.text;
+  return { modifiers, ...info };
+}
+
+async function sendTrustedKeys(tabId, chords) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, '1.3');
+  try {
+    for (const chord of chords) {
+      const info = parseChordCdp(chord);
+      const common = {
+        modifiers: info.modifiers,
+        key: info.key,
+        code: info.code,
+        windowsVirtualKeyCode: info.keyCode,
+        nativeVirtualKeyCode: info.keyCode,
+      };
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: info.text ? 'keyDown' : 'rawKeyDown',
+        ...common,
+        ...(info.text ? { text: info.text, unmodifiedText: info.text } : {}),
+      });
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: 'keyUp', ...common });
+    }
+  } finally {
+    await chrome.debugger.detach(target);
+  }
+  return { ok: true, count: chords.length };
+}
+
 async function getReuseTabId() {
   const { reuseTabId } = await chrome.storage.session.get('reuseTabId');
   return typeof reuseTabId === 'number' ? reuseTabId : null;
@@ -281,6 +359,80 @@ function pageContextText() {
   return text;
 }
 
+function pageClearLabels() {
+  const root = document.getElementById('__cli_overlay_root__');
+  if (root) root.remove();
+  document.querySelectorAll('[data-cli-id]').forEach((el) => {
+    delete el.dataset.cliId;
+  });
+  window.__cliLabels = {};
+  return { ok: true };
+}
+
+function pageSendKeys(chords) {
+  const NAMED = {
+    enter: { key: 'Enter', code: 'Enter', keyCode: 13 },
+    tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
+    escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
+    esc: { key: 'Escape', code: 'Escape', keyCode: 27 },
+    backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
+    delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
+    space: { key: ' ', code: 'Space', keyCode: 32 },
+    up: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+    arrowup: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+    down: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+    arrowdown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+    left: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+    arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+    right: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+    arrowright: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+    home: { key: 'Home', code: 'Home', keyCode: 36 },
+    end: { key: 'End', code: 'End', keyCode: 35 },
+    pageup: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
+    pagedown: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
+  };
+  function resolve(part) {
+    const lower = part.toLowerCase();
+    if (NAMED[lower]) return { ...NAMED[lower] };
+    if (part.length === 1) {
+      const code = /[a-z]/i.test(part) ? 'Key' + part.toUpperCase() : /[0-9]/.test(part) ? 'Digit' + part : '';
+      return { key: part, code, keyCode: part.toUpperCase().charCodeAt(0) };
+    }
+    return { key: part, code: '', keyCode: 0 };
+  }
+  for (const chord of chords) {
+    const parts = chord.split('+');
+    const keyPart = parts.pop();
+    const mods = { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false };
+    for (const p of parts) {
+      const m = p.toLowerCase();
+      if (m === 'ctrl' || m === 'control') mods.ctrlKey = true;
+      else if (m === 'shift') mods.shiftKey = true;
+      else if (m === 'alt' || m === 'option') mods.altKey = true;
+      else if (m === 'meta' || m === 'cmd' || m === 'command' || m === 'win') mods.metaKey = true;
+    }
+    const info = resolve(keyPart);
+    if (mods.shiftKey && info.key.length === 1) info.key = info.key.toUpperCase();
+    const target = document.activeElement || document.body;
+    const base = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      ...mods,
+      key: info.key,
+      code: info.code,
+      keyCode: info.keyCode,
+      which: info.keyCode,
+    };
+    target.dispatchEvent(new KeyboardEvent('keydown', base));
+    if (info.key.length === 1 && !mods.ctrlKey && !mods.metaKey) {
+      target.dispatchEvent(new KeyboardEvent('keypress', base));
+    }
+    target.dispatchEvent(new KeyboardEvent('keyup', base));
+  }
+  return { ok: true, count: chords.length };
+}
+
 function pageClickLabel(id) {
   const el = window.__cliLabels && window.__cliLabels[id];
   if (!el) return { ok: false, error: `unknown element id: ${id}` };
@@ -447,7 +599,7 @@ function resolveFrameId(tabId, elementId) {
 }
 
 async function handleRequest(msg) {
-  const { action, query, url, waitMs, links, context, elementId, text, value } = msg;
+  const { action, query, url, waitMs, links, context, elementId, text, value, chords, trusted } = msg;
 
   if (action === 'google' || action === 'ddg' || action === 'visit') {
     const targetUrl = buildUrl(action, query, url);
@@ -531,6 +683,37 @@ async function handleRequest(msg) {
       args: [elementId, text],
     });
     if (!result.ok) throw new Error(result.error);
+    return { ok: true };
+  }
+
+  if (action === 'key') {
+    const tabId = await getCurrentTabId();
+    const frameId = elementId ? resolveFrameId(tabId, elementId) : 0;
+    if (elementId) {
+      await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] },
+        func: (id) => {
+          const el = window.__cliLabels && window.__cliLabels[id];
+          if (el) el.focus();
+        },
+        args: [elementId],
+      });
+    }
+    if (trusted) {
+      return await sendTrustedKeys(tabId, chords);
+    }
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: pageSendKeys,
+      args: [chords],
+    });
+    return { ok: true, count: result.count };
+  }
+
+  if (action === 'clearlabels') {
+    const tabId = await getCurrentTabId();
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: pageClearLabels });
+    frameMapsByTab.delete(tabId);
     return { ok: true };
   }
 

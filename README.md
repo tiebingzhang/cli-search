@@ -10,6 +10,8 @@ It works by launching a local daemon that bridges the command line to a Chrome e
 - **Visit**: `search-cli visit "https://example.com"` — fetch page content from any URL
 - **Snapshot**: `search-cli snapshot` — label interactive elements on the current tab with IDs, or `snapshot --context` to print the page text with those IDs inlined in place
 - **Interact**: `search-cli click <ID>` and `search-cli type <ID> "text"` — click elements and type into inputs
+- **Keystrokes**: `search-cli key <keys...>` — send keys to the page (add `--trusted` to move focus on Tab)
+- **Clear labels**: `search-cli clearlabels` — remove the snapshot overlay from the current tab
 - **Screenshot**: `search-cli screenshot` — capture the current tab as PNG
 
 ## Installation
@@ -48,7 +50,39 @@ npm install
 ./bin/search-cli.js click AB
 ./bin/search-cli.js type CD "hello world"
 ./bin/search-cli.js screenshot ~/Desktop/page.png
+
+# Send keystrokes
+./bin/search-cli.js key Enter
+./bin/search-cli.js key Ctrl+k
+./bin/search-cli.js key g i              # a sequence: g then i
+./bin/search-cli.js key / --in AB        # focus element AB, then press /
+./bin/search-cli.js key Tab --trusted    # real key event: actually moves focus
+
+# Remove the snapshot overlay
+./bin/search-cli.js clearlabels
 ```
+
+## Sending keystrokes
+
+`key` takes one or more chords, sent in order. Combine a key with modifiers using
+`+`, e.g. `Ctrl+k`, `Shift+Tab`, `Cmd+Enter`. Modifier names: `Ctrl`/`Control`,
+`Shift`, `Alt`/`Option`, `Meta`/`Cmd`/`Command`/`Win`.
+
+Named keys (case-insensitive): `Enter`, `Tab`, `Escape`/`Esc`, `Backspace`,
+`Delete`, `Space`, `ArrowUp`/`Up`, `ArrowDown`/`Down`, `ArrowLeft`/`Left`,
+`ArrowRight`/`Right`, `Home`, `End`, `PageUp`, `PageDown`. Any single character
+(letter, digit, or symbol) sends that key.
+
+Options:
+
+- `--in <ID>` — focus the given snapshot element first, then send the keys.
+- `--trusted` — dispatch real browser key events through `chrome.debugger` (CDP)
+  instead of synthetic DOM events. Use this when you need the default action of a
+  key, such as `Tab` actually moving focus to the next field. Without it, keys are
+  synthetic (`isTrusted: false`), so sites that run their own key handlers respond,
+  but the browser's built-in behaviors (like tab-order focus) do not fire. Trusted
+  mode briefly attaches the debugger to the tab, which shows Chrome's "started
+  debugging this browser" banner.
 
 ## Architecture
 
