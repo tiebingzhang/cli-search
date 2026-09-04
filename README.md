@@ -27,7 +27,11 @@ It works by launching a local daemon that bridges the command line to a Chrome e
 ```bash
 cd cli
 npm install
+npm link
 ```
+
+`npm link` puts `search-cli` on your `PATH`, so you can run it as
+`search-cli` from any directory instead of `./bin/search-cli.js`.
 
 ### 2. Install the Chrome Extension
 
@@ -39,44 +43,44 @@ npm install
 
 ```bash
 # Start the background daemon (auto-started on first use)
-./bin/search-cli.js start
+search-cli start
 
 # Search Google
-./bin/search-cli.js google "pi calculator"
+search-cli google "pi calculator"
 
 # Search DuckDuckGo with links only
-./bin/search-cli.js ddg "node.js docs" --links
+search-cli ddg "node.js docs" --links
 
 # Visit a URL with custom wait time
-./bin/search-cli.js visit "https://example.com" --wait=3000
+search-cli visit "https://example.com" --wait=3000
 
 # Interact with the current tab
-./bin/search-cli.js snapshot
-./bin/search-cli.js snapshot --context
-./bin/search-cli.js click AB
-./bin/search-cli.js type CD "hello world"
-./bin/search-cli.js screenshot ~/Desktop/page.png
+search-cli snapshot
+search-cli snapshot --context
+search-cli click AB
+search-cli type CD "hello world"
+search-cli screenshot ~/Desktop/page.png
 
 # Fill form fields by label instead of hunting for IDs
-./bin/search-cli.js fields                                  # list the editable fields and dropdowns
-./bin/search-cli.js type --label "To recipients" "a@b.com"
-./bin/search-cli.js type --label Subject "hello there"
-./bin/search-cli.js type --focused "into whatever is focused"
+search-cli fields                                  # list the editable fields and dropdowns
+search-cli type --label "To recipients" "a@b.com"
+search-cli type --label Subject "hello there"
+search-cli type --focused "into whatever is focused"
 
 # Read and set dropdowns by label
-./bin/search-cli.js readdropdown --label "Intern season"       # open it and list options
-./bin/search-cli.js selectoption --label "Intern season" Fall  # choose an option on a <select>
+search-cli readdropdown --label "Intern season"       # open it and list options
+search-cli selectoption --label "Intern season" Fall  # choose an option on a <select>
 
 # Send keystrokes
-./bin/search-cli.js key Enter
-./bin/search-cli.js key Ctrl+k
-./bin/search-cli.js key g i              # a sequence: g then i
-./bin/search-cli.js key / --in AB        # focus element AB, then press /
-./bin/search-cli.js key Tab --trusted    # real key event: actually moves focus
+search-cli key Enter
+search-cli key Ctrl+k
+search-cli key g i              # a sequence: g then i
+search-cli key / --in AB        # focus element AB, then press /
+search-cli key Tab --trusted    # real key event: actually moves focus
 
 # Remove the snapshot overlay / close the tool's tabs
-./bin/search-cli.js clearlabels
-./bin/search-cli.js closetabs
+search-cli clearlabels
+search-cli closetabs
 ```
 
 ## Filling form fields
