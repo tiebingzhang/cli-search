@@ -123,6 +123,10 @@ function connect() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
     return;
   }
+  // Chrome sends this extension's chrome-extension://<id> Origin on the handshake,
+  // which the daemon pins and requires. A web page cannot forge that Origin, so no
+  // page the user visits can reach the daemon. If the handshake is refused (1006),
+  // the extension id changed: run `search-cli unpin` and reload the extension.
   socket = new WebSocket(`ws://127.0.0.1:${WS_PORT}`);
   setConnected(false);
 

@@ -8,6 +8,7 @@ const { spawn } = require('child_process');
 const SOCK_DIR = path.join(os.homedir(), '.chrome-cli-search');
 const SOCK_PATH = path.join(SOCK_DIR, 'daemon.sock');
 const PID_PATH = path.join(SOCK_DIR, 'daemon.pid');
+const PIN_PATH = path.join(SOCK_DIR, 'extension-id');
 const DAEMON_SCRIPT = path.join(__dirname, '..', 'lib', 'daemon.js');
 
 function tryConnect() {
@@ -45,6 +46,33 @@ function isRunning(pid) {
   }
 }
 
+function askPid(conn) {
+  return new Promise((resolve) => {
+    let buf = '';
+    const finish = (v) => {
+      try { conn.destroy(); } catch (e) { /* ignore */ }
+      resolve(v);
+    };
+    const timer = setTimeout(() => finish(null), 2000);
+    conn.on('data', (chunk) => {
+      buf += chunk;
+      const idx = buf.indexOf('\n');
+      if (idx === -1) return;
+      clearTimeout(timer);
+      try {
+        finish(JSON.parse(buf.slice(0, idx)).pid || null);
+      } catch (e) {
+        finish(null);
+      }
+    });
+    conn.on('error', () => {
+      clearTimeout(timer);
+      finish(null);
+    });
+    conn.write(JSON.stringify({ action: 'ping' }) + '\n');
+  });
+}
+
 async function startDaemon() {
   if (fs.existsSync(PID_PATH)) {
     const pid = parseInt(fs.readFileSync(PID_PATH, 'utf8'), 10);
@@ -60,8 +88,8 @@ async function startDaemon() {
     await new Promise((r) => setTimeout(r, 200));
     try {
       const conn = await tryConnect();
-      conn.end();
-      console.log(`daemon started (pid ${child.pid})`);
+      const pid = await askPid(conn);
+      console.log(`daemon running (pid ${pid || child.pid})`);
       return;
     } catch (e) {
       // keep waiting
@@ -95,13 +123,35 @@ async function statusDaemon() {
     console.log('daemon not running (stale pid file)');
     return;
   }
+  let res;
   try {
-    const conn = await tryConnect();
-    conn.end();
-    console.log(`daemon running (pid ${pid})`);
+    res = await sendRequest({ action: 'status' });
   } catch (e) {
     console.log(`daemon process alive (pid ${pid}) but socket not responding`);
+    return;
   }
+  console.log(`daemon running (pid ${res.pid || pid})`);
+  console.log(`extension connected: ${res.extensionConnected ? 'yes' : 'no'}`);
+  console.log(`pinned extension id: ${res.pinnedExtensionId || '(none yet - first extension to connect will be pinned)'}`);
+  const refused = res.refusedHandshakes || [];
+  console.log(`refused handshakes: ${refused.length}`);
+  for (const r of refused.slice(-5)) console.log(`  ${r}`);
+  if (!res.extensionConnected) {
+    if (refused.length) {
+      console.log("hint: the handshake was refused - if your extension's id changed (reinstalled or moved), run 'search-cli unpin' and reload it at chrome://extensions");
+    } else {
+      console.log("hint: nothing has dialed in yet - open Chrome with the extension loaded; the extension reconnects on its own within a few seconds");
+    }
+  }
+}
+
+function unpin() {
+  if (!fs.existsSync(PIN_PATH)) {
+    console.log('no pinned extension id');
+    return;
+  }
+  fs.unlinkSync(PIN_PATH);
+  console.log('cleared pinned extension id; the next extension to connect will be pinned');
 }
 
 function printHelp() {
@@ -110,7 +160,8 @@ function printHelp() {
 commands:
   start                     start the background daemon
   stop                      stop the background daemon
-  status                    show whether the daemon is running
+  status                    show daemon state, extension pin, refused handshakes
+  unpin                     forget the pinned extension id (after reinstalling)
   google <query>            search Google and return page text
   ddg <query>               search DuckDuckGo and return page text
   visit <url>               open a URL and return page text
@@ -135,7 +186,12 @@ commands:
 
 options (google/ddg/visit only):
   --wait=ms                 wait this long after load before reading the page (default 1000)
-  --links                   return links instead of page text`);
+  --links                   return links instead of page text
+
+security:
+  the daemon only accepts WebSocket handshakes whose Origin is the pinned
+  chrome-extension:// id, so web pages you visit cannot drive your browser.
+  Run 'search-cli unpin' if you reload the extension from a different path.`);
 }
 
 async function main() {
@@ -156,6 +212,10 @@ async function main() {
   }
   if (action === 'status') {
     await statusDaemon();
+    return;
+  }
+  if (action === 'unpin') {
+    unpin();
     return;
   }
 
@@ -322,7 +382,7 @@ async function main() {
 
   if (!['google', 'ddg', 'visit'].includes(action)) {
     console.error(
-      'usage: search-cli <start|stop|status|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links]'
+      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links]'
     );
     process.exit(1);
   }

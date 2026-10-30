@@ -19,6 +19,8 @@ It works by launching a local daemon that bridges the command line to a Chrome e
 - **Clear labels**: `search-cli clearlabels` — remove the snapshot overlay from the current tab
 - **Close tabs**: `search-cli closetabs` — close every tab the tool has opened
 - **Screenshot**: `search-cli screenshot` — capture the current tab as PNG
+- **Status**: `search-cli status` — daemon pid, extension connection, pinned extension id,
+  refused handshakes; `search-cli unpin` re-pins after reinstalling the extension
 
 ## Installation
 
@@ -137,11 +139,48 @@ Options:
   mode briefly attaches the debugger to the tab, which shows Chrome's "started
   debugging this browser" banner.
 
+## Security
+
+The daemon listens on `127.0.0.1:47285` and the extension connects **to** it (the extension
+initiates the WebSocket, since it cannot listen on a port). Because this tool drives your
+real, logged-in Chrome profile, the handshake is authenticated:
+
+- A WebSocket handshake from a web page always carries an `Origin` header, so the daemon
+  accepts a connection **only** when its Origin is a `chrome-extension://` id. Any page you
+  visit is refused (403), which closes the cross-site WebSocket hijacking hole where a
+  malicious site could otherwise issue `click`/`type` against your authenticated tabs.
+- The first extension to connect is pinned to `~/.chrome-cli-search/extension-id` (trust on
+  first use). Later handshakes must present that same id, so a different installed extension
+  cannot take over the bridge.
+- `~/.chrome-cli-search` is mode `0700`; the pid file, unix socket, and pin file are `0600`.
+- The daemon refuses to start a second instance instead of clobbering the live socket, and
+  clears a stale pid/socket left behind by a killed instance.
+
+Commands:
+
+```bash
+search-cli status   # daemon pid, extension connected?, pinned id, recent refusals
+search-cli unpin    # forget the pinned id (after reinstalling or moving the extension)
+```
+
+If `status` shows `extension connected: no` plus refusals, the extension's id changed: run
+`search-cli unpin`, then reload the extension at `chrome://extensions` so it re-pins.
+
+Residual risk: a local process running as your user can forge an `Origin` header, since it is
+a plain TCP client. Such a process can already read Chrome's cookie store, so this adds little
+new exposure; see `TODO.md` item 8 for a shared-secret upgrade. Note also that `--trusted`
+keys and any future `eval` attach the Chrome debugger, which shows the "started debugging this
+browser" banner.
+
 ## Architecture
 
 ![Architecture Overview](architecture.svg)
 
-The CLI spawns a background daemon that maintains a WebSocket connection to the Chrome extension. All browser operations (tab creation, page content extraction, element interaction) happen inside the extension.
+The CLI spawns a background daemon that owns a unix socket (`~/.chrome-cli-search/daemon.sock`)
+and a WebSocket port. The Chrome extension connects to the daemon and stays connected; the CLI
+forwards each request over the socket to the extension and prints the reply. All browser
+operations (tab creation, page content extraction, element interaction) happen inside the
+extension.
 
 ## Requirements
 
