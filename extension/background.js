@@ -339,7 +339,30 @@ function pageLabelElements(framePrefix) {
   return elements;
 }
 
+// Rendering-aware page text extraction.
+//
+// innerText only walks the *rendered* tree. When a node has no layout box — a display:none or
+// zero-size iframe (Google SERPs are full of hidden ad/video-player embeds) or an unrendered body —
+// it falls back to textContent, which leaks raw <script>/<style> source. rawText() walks text nodes
+// instead and skips non-content containers. Both page functions below are injected by
+// chrome.scripting.executeScript, which serializes each function in isolation, so rawText is
+// intentionally duplicated rather than shared.
+
 function pageContextText() {
+  const rawText = () => {
+    const SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, HEAD: 1, TITLE: 1, META: 1, LINK: 1, IFRAME: 1, SVG: 1 };
+    if (!document.body) return '';
+    const parts = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const p = node.parentElement;
+        if (!p || SKIP[p.tagName.toUpperCase()]) return NodeFilter.FILTER_REJECT;
+        return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+      },
+    });
+    while (walker.nextNode()) parts.push(walker.currentNode.nodeValue.trim());
+    return parts.join('\n');
+  };
   const markers = [];
   document.querySelectorAll('[data-cli-id]').forEach((el) => {
     const id = el.getAttribute('data-cli-id');
@@ -358,9 +381,42 @@ function pageContextText() {
     el.parentNode.insertBefore(m, el);
     markers.push(m);
   });
-  const text = document.body.innerText;
+  const text = document.body.getClientRects().length ? document.body.innerText : rawText();
   markers.forEach((m) => m.remove());
   return text;
+}
+
+function pageExtractText() {
+  const rawText = () => {
+    const SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, HEAD: 1, TITLE: 1, META: 1, LINK: 1, IFRAME: 1, SVG: 1 };
+    if (!document.body) return '';
+    const parts = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const p = node.parentElement;
+        if (!p || SKIP[p.tagName.toUpperCase()]) return NodeFilter.FILTER_REJECT;
+        return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+      },
+    });
+    while (walker.nextNode()) parts.push(walker.currentNode.nodeValue.trim());
+    return parts.join('\n');
+  };
+
+  // Drop frames that are never rendered: hidden ads, trackers, collapsed video embeds.
+  // NOTE: window.frameElement is null inside cross-origin frames, so this only covers
+  // same-origin ones; cross-origin hidden frames are handled by the rawText() fallback below.
+  const fe = window.frameElement;
+  if (fe) {
+    const cs = getComputedStyle(fe);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return '';
+    // clientWidth/clientHeight (content box), not getBoundingClientRect(): Blink gives iframes a
+    // 2px default border, so even width=0/height=0 frames report a 4x4 rect. 0 also means an
+    // ancestor is display:none.
+    if (fe.clientWidth < 2 || fe.clientHeight < 2) return '';
+  }
+  if (!document.body) return '';
+  if (!document.body.getClientRects().length) return rawText();
+  return document.body.innerText;
 }
 
 function pageClearLabels() {
@@ -959,7 +1015,7 @@ async function handleRequest(msg) {
               .map((a) => `${a.innerText.trim().replace(/\s+/g, ' ')} - ${a.href}`)
               .filter((line) => line.length > 3)
               .join('\n')
-        : () => document.body.innerText,
+        : pageExtractText,
     });
     return { text: frames.map((f) => f.result).filter(Boolean).join('\n') };
   }
