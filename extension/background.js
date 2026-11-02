@@ -184,23 +184,54 @@ function waitForTabLoad(tabId) {
   });
 }
 
-async function getOrCreateTab(targetUrl) {
-  const reuseTabId = await getReuseTabId();
-  if (reuseTabId !== null) {
-    try {
-      await chrome.tabs.get(reuseTabId);
+const busyTabs = new Set();
+let acquireChain = Promise.resolve();
+
+function acquireTab(targetUrl) {
+  const run = acquireChain.then(async () => {
+    const reuseTabId = await getReuseTabId();
+    let reuseAlive = false;
+    let reuseGroupId = -1;
+    if (reuseTabId !== null) {
+      try {
+        reuseGroupId = (await chrome.tabs.get(reuseTabId)).groupId;
+        reuseAlive = true;
+      } catch (e) {}
+    }
+    if (reuseAlive && !busyTabs.has(reuseTabId)) {
+      busyTabs.add(reuseTabId);
       const loaded = waitForTabLoad(reuseTabId);
       await chrome.tabs.update(reuseTabId, { url: targetUrl, active: true });
-      await loaded;
-      return reuseTabId;
-    } catch (e) {
-      // fall through and create a new tab
+      return { tabId: reuseTabId, loaded };
     }
-  }
-  const tab = await chrome.tabs.create({ url: targetUrl });
-  await setReuseTabId(tab.id);
-  await waitForTabLoad(tab.id);
-  return tab.id;
+    const tab = await chrome.tabs.create({ url: targetUrl, active: !reuseAlive });
+    busyTabs.add(tab.id);
+    const loaded = waitForTabLoad(tab.id);
+    if (reuseAlive) {
+      try {
+        if (reuseGroupId !== -1) await chrome.tabs.group({ tabIds: [tab.id], groupId: reuseGroupId });
+        else {
+          const groupId = await chrome.tabs.group({ tabIds: [tab.id] });
+          await chrome.tabGroups.update(groupId, { color: 'blue', title: 'CLI' });
+        }
+      } catch (e) {}
+    } else {
+      await setReuseTabId(tab.id);
+    }
+    return { tabId: tab.id, loaded };
+  });
+  acquireChain = run.catch(() => {});
+  return run;
+}
+
+async function releaseTab(tabId, close) {
+  busyTabs.delete(tabId);
+  if (!close) return;
+  try {
+    await chrome.tabs.remove(tabId);
+  } catch (e) {}
+  if ((await getReuseTabId()) === tabId) await chrome.storage.session.set({ reuseTabId: null });
+  frameMapsByTab.delete(tabId);
 }
 
 async function getCurrentTabId() {
@@ -1000,23 +1031,29 @@ function resolveFrameId(tabId, elementId) {
 }
 
 async function handleRequest(msg) {
-  const { action, query, url, waitMs, links, context, elementId, text, value, chords, trusted, force, label } = msg;
+  const { action, query, url, waitMs, links, context, elementId, text, value, chords, trusted, force, label, close } = msg;
 
   if (action === 'google' || action === 'ddg' || action === 'visit') {
     const targetUrl = buildUrl(action, query, url);
-    const tabId = await getOrCreateTab(targetUrl);
-    await new Promise((r) => setTimeout(r, typeof waitMs === 'number' ? waitMs : 1000));
-    const frames = await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      func: links
-        ? () =>
-            Array.from(document.querySelectorAll('a[href]'))
-              .filter((a) => a.offsetParent !== null || a === document.body)
-              .map((a) => `${a.innerText.trim().replace(/\s+/g, ' ')} - ${a.href}`)
-              .filter((line) => line.length > 3)
-              .join('\n')
-        : pageExtractText,
-    });
+    const { tabId, loaded } = await acquireTab(targetUrl);
+    let frames;
+    try {
+      await loaded;
+      await new Promise((r) => setTimeout(r, typeof waitMs === 'number' ? waitMs : 1000));
+      frames = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: links
+          ? () =>
+              Array.from(document.querySelectorAll('a[href]'))
+                .filter((a) => a.offsetParent !== null || a === document.body)
+                .map((a) => `${a.innerText.trim().replace(/\s+/g, ' ')} - ${a.href}`)
+                .filter((line) => line.length > 3)
+                .join('\n')
+          : pageExtractText,
+      });
+    } finally {
+      await releaseTab(tabId, close);
+    }
     return { text: frames.map((f) => f.result).filter(Boolean).join('\n') };
   }
 

@@ -56,6 +56,9 @@ search-cli ddg "node.js docs" --links
 # Visit a URL with custom wait time
 search-cli visit "https://example.com" --wait=3000
 
+# Close the tab after reading it
+search-cli visit "https://example.com" --close
+
 # Interact with the current tab
 search-cli snapshot
 search-cli snapshot --context

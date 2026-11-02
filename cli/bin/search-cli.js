@@ -187,6 +187,7 @@ commands:
 options (google/ddg/visit only):
   --wait=ms                 wait this long after load before reading the page (default 1000)
   --links                   return links instead of page text
+  --close                   close the tab after reading it
 
 security:
   the daemon only accepts WebSocket handshakes whose Origin is the pinned
@@ -382,13 +383,14 @@ async function main() {
 
   if (!['google', 'ddg', 'visit'].includes(action)) {
     console.error(
-      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links]'
+      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links] [--close]'
     );
     process.exit(1);
   }
 
   let waitMs = 1000;
   let links = false;
+  let close = false;
   const args = [];
   for (const token of rest) {
     const m = /^--wait=(\d+)$/.exec(token);
@@ -396,6 +398,8 @@ async function main() {
       waitMs = parseInt(m[1], 10);
     } else if (token === '--links') {
       links = true;
+    } else if (token === '--close') {
+      close = true;
     } else {
       args.push(token);
     }
@@ -406,7 +410,7 @@ async function main() {
     console.error('missing query/url argument');
     process.exit(1);
   }
-  const req = action === 'visit' ? { action, url: arg, waitMs, links } : { action, query: arg, waitMs, links };
+  const req = action === 'visit' ? { action, url: arg, waitMs, links, close } : { action, query: arg, waitMs, links, close };
   const res = await sendRequest(req);
   process.stdout.write(res.text + '\n');
 }
