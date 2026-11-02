@@ -166,6 +166,7 @@ commands:
   ddg <query>               search DuckDuckGo and return page text
   visit <url>               open a URL and return page text
   attach                    target the browser's current active tab for later commands
+  read [--links]            return the current tab's page text without reloading
   snapshot                  label clickable/input elements on the current tab, print their IDs
   snapshot --context        print the page text with element IDs inlined in context
   click <ID>                click the element with the given snapshot ID
@@ -173,6 +174,7 @@ commands:
   type --focused <text>     type text into the currently focused input (no ID)
                             add --force for non-standard/custom editable fields
   type --label <label> <text> type into the field whose label matches (e.g. Subject)
+  focus                     show which element has focus
   fields                    list only the editable fields and dropdowns on the tab, with labels
   key <keys...> [--in <ID>] send keystrokes to the page (e.g. Enter, Ctrl+k, g i)
                             add --trusted for real key events (moves focus on Tab)
@@ -230,6 +232,12 @@ async function main() {
     return;
   }
 
+  if (action === 'read') {
+    const res = await sendRequest({ action: 'read', links: rest.includes('--links') });
+    process.stdout.write(res.text + '\n');
+    return;
+  }
+
   if (action === 'snapshot') {
     const context = rest.includes('--context');
     const res = await sendRequest({ action: 'snapshot', context });
@@ -247,8 +255,27 @@ async function main() {
       console.error('usage: search-cli click <ID>');
       process.exit(1);
     }
-    await sendRequest({ action: 'click', elementId });
-    console.log(`clicked ${elementId}`);
+    const res = await sendRequest({ action: 'click', elementId });
+    console.log(`clicked ${elementId} ${res.desc}`);
+    if (res.navigated) console.log(`navigated: ${res.navigated}`);
+    if (res.labelsLost) console.log('page reloaded; labels are gone, run snapshot');
+    return;
+  }
+
+  if (action === 'focus') {
+    const res = await sendRequest({ action: 'focus' });
+    const f = res.focus;
+    if (!f) {
+      console.log('no focused element');
+      return;
+    }
+    const parts = [f.tag];
+    if (f.role) parts.push(`role=${f.role}`);
+    if (f.type) parts.push(`type=${f.type}`);
+    if (f.editable) parts.push('editable');
+    parts.push(f.label ? `"${f.label}"` : '(no label)');
+    parts.push(f.id ? `id=${f.id}` : '(no id)');
+    console.log(parts.join(' '));
     return;
   }
 
@@ -387,7 +414,7 @@ async function main() {
 
   if (!['google', 'ddg', 'visit'].includes(action)) {
     console.error(
-      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--max-wait=ms] [--links] [--json] [--no-chrome] [--limit=N] [--close]'
+      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|read|snapshot|fields|focus|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--max-wait=ms] [--links] [--json] [--no-chrome] [--limit=N] [--close]'
     );
     process.exit(1);
   }

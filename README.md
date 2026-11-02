@@ -8,8 +8,10 @@ It works by launching a local daemon that bridges the command line to a Chrome e
 
 - **Search**: `search-cli google "query"` and `search-cli ddg "query"` — run searches and get page text
 - **Visit**: `search-cli visit "https://example.com"` — fetch page content from any URL
+- **Read**: `search-cli read` — print the current tab's text without reloading or visiting; add `--links` for links
 - **Snapshot**: `search-cli snapshot` — label interactive elements on the current tab with IDs, or `snapshot --context` to print the page text with those IDs inlined in place
 - **Interact**: `search-cli click <ID>` and `search-cli type <ID> "text"` — click elements and type into inputs
+- **Focus**: `search-cli focus` — show which element has focus, with its snapshot ID if it has one
 - **Fields**: `search-cli fields` — list the editable fields and dropdowns on the tab, with labels
 - **Type by label**: `search-cli type --label Subject "text"` — type into a field by its label, no ID needed
 - **Type into focus**: `search-cli type --focused "text"` — type into whatever input is focused (add `--force` for custom fields)

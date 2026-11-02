@@ -654,7 +654,8 @@ function pageClickLabel(id) {
   el.dispatchEvent(new PointerEvent('pointerup', { ...base, pointerId: 1, isPrimary: true }));
   el.dispatchEvent(new MouseEvent('mouseup', base));
   el.dispatchEvent(new MouseEvent('click', base));
-  return { ok: true };
+  const name = (el.getAttribute('aria-label') || el.innerText || el.value || el.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  return { ok: true, desc: `${el.tagName.toLowerCase()}${name ? ` "${name}"` : ''}` };
 }
 
 function pageTypeLabel(id, text) {
@@ -727,6 +728,38 @@ function pageTypeFocusedForce(text) {
 // Shared, self-contained field helpers are inlined into the two functions below
 // because chrome.scripting.executeScript serializes each function in isolation.
 
+function pageFocusInfo() {
+  let el = document.activeElement;
+  while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+  if (!el || el === document.body || el === document.documentElement) return null;
+  if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') return null;
+  const p = [];
+  const a = el.getAttribute('aria-label');
+  if (a) p.push(a);
+  const lb = el.getAttribute('aria-labelledby');
+  if (lb) lb.split(/\s+/).forEach((id) => { const n = document.getElementById(id); if (n) p.push(n.textContent); });
+  if (el.labels) for (const l of el.labels) p.push(l.textContent);
+  if (el.placeholder) p.push(el.placeholder);
+  if (el.name) p.push(el.name);
+  if (el.title) p.push(el.title);
+  let label = p.join(' ').replace(/\s+/g, ' ').trim();
+  if (!label) label = (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  let id = null;
+  if (window.__cliLabels) {
+    for (const k of Object.keys(window.__cliLabels)) {
+      if (window.__cliLabels[k] === el) { id = k; break; }
+    }
+  }
+  return {
+    tag: el.tagName.toLowerCase(),
+    role: el.getAttribute('role'),
+    type: el.type || null,
+    editable: el.isContentEditable,
+    label,
+    id,
+  };
+}
+
 function pageListFields() {
   function isVisible(el) {
     const s = getComputedStyle(el);
@@ -747,13 +780,15 @@ function pageListFields() {
     return p.join(' ').replace(/\s+/g, ' ').trim();
   }
   const sel =
-    'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=image]), textarea, [contenteditable=""], [contenteditable=true], [role=textbox], select, [role="combobox"], [aria-haspopup="listbox"], [aria-haspopup="menu"]';
+    'input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=image]), textarea, [contenteditable], [role=textbox], select, [role="combobox"], [aria-haspopup="listbox"], [aria-haspopup="menu"]';
   return Array.from(document.querySelectorAll(sel))
+    .filter((el) => !el.hasAttribute('contenteditable') || (el.isContentEditable && !(el.parentElement && el.parentElement.isContentEditable)))
     .filter(isVisible)
     .map((el) => {
       const tag = el.tagName.toLowerCase();
       let type;
-      if (tag === 'select') type = 'select';
+      if (el.isContentEditable) type = 'contenteditable';
+      else if (tag === 'select') type = 'select';
       else if (tag === 'input') type = el.type || 'text';
       else if (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup')) type = 'combobox';
       else type = tag;
@@ -1253,6 +1288,23 @@ async function handleRequest(msg) {
     return { tabId: tab.id, url: tab.url, title: tab.title };
   }
 
+  if (action === 'read') {
+    const tabId = await getCurrentTabId();
+    const frames = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      args: ['lines'],
+      func: links
+        ? () =>
+            Array.from(document.querySelectorAll('a[href]'))
+              .filter((a) => a.offsetParent !== null || a === document.body)
+              .map((a) => `${a.innerText.trim().replace(/\s+/g, ' ')} - ${a.href}`)
+              .filter((line) => line.length > 3)
+              .join('\n')
+        : pageExtractText,
+    });
+    return { text: frames.map((f) => f.result).filter(Boolean).join('\n') };
+  }
+
   if (action === 'snapshot') {
     const tabId = await getCurrentTabId();
     // Discover every frame in the tab (SPAs often render main content in a same-origin iframe).
@@ -1292,13 +1344,24 @@ async function handleRequest(msg) {
   if (action === 'click') {
     const tabId = await getCurrentTabId();
     const frameId = resolveFrameId(tabId, elementId);
+    const before = await chrome.tabs.get(tabId);
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
       func: pageClickLabel,
       args: [elementId],
     });
     if (!result.ok) throw new Error(result.error);
-    return { ok: true };
+    await new Promise((r) => setTimeout(r, 300));
+    const after = await chrome.tabs.get(tabId);
+    let labelsLost = false;
+    try {
+      const [{ result: kept }] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: () => !!window.__cliLabels });
+      labelsLost = !kept;
+    } catch (e) {
+      labelsLost = true;
+    }
+    if (labelsLost) frameMapsByTab.delete(tabId);
+    return { ok: true, desc: result.desc, navigated: after.url !== before.url ? after.url : null, labelsLost };
   }
 
   if (action === 'fields') {
@@ -1345,6 +1408,16 @@ async function handleRequest(msg) {
     });
     if (!result.ok) throw new Error(result.error);
     return { ok: true };
+  }
+
+  if (action === 'focus') {
+    const tabId = await getCurrentTabId();
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: pageFocusInfo,
+    });
+    const found = results.map((r) => r.result).find(Boolean);
+    return { focus: found || null };
   }
 
   if (action === 'key') {
