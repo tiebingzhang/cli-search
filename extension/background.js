@@ -185,6 +185,17 @@ function waitForTabLoad(tabId) {
 }
 
 const busyTabs = new Set();
+const navResult = new Map();
+
+chrome.webRequest.onCompleted.addListener(
+  (d) => navResult.set(d.tabId, { status: d.statusCode, url: d.url }),
+  { urls: ['<all_urls>'], types: ['main_frame'] }
+);
+chrome.webRequest.onErrorOccurred.addListener(
+  (d) => navResult.set(d.tabId, { error: d.error, url: d.url }),
+  { urls: ['<all_urls>'], types: ['main_frame'] }
+);
+
 let acquireChain = Promise.resolve();
 
 function acquireTab(targetUrl) {
@@ -200,12 +211,14 @@ function acquireTab(targetUrl) {
     }
     if (reuseAlive && !busyTabs.has(reuseTabId)) {
       busyTabs.add(reuseTabId);
+      navResult.delete(reuseTabId);
       const loaded = waitForTabLoad(reuseTabId);
       await chrome.tabs.update(reuseTabId, { url: targetUrl, active: true });
       return { tabId: reuseTabId, loaded };
     }
     const tab = await chrome.tabs.create({ url: targetUrl, active: !reuseAlive });
     busyTabs.add(tab.id);
+    navResult.delete(tab.id);
     const loaded = waitForTabLoad(tab.id);
     if (reuseAlive) {
       try {
@@ -1037,24 +1050,49 @@ async function handleRequest(msg) {
     const targetUrl = buildUrl(action, query, url);
     const { tabId, loaded } = await acquireTab(targetUrl);
     let frames;
+    let statusLine = null;
     try {
       await loaded;
       await new Promise((r) => setTimeout(r, typeof waitMs === 'number' ? waitMs : 1000));
-      frames = await chrome.scripting.executeScript({
-        target: { tabId, allFrames: true },
-        func: links
-          ? () =>
-              Array.from(document.querySelectorAll('a[href]'))
-                .filter((a) => a.offsetParent !== null || a === document.body)
-                .map((a) => `${a.innerText.trim().replace(/\s+/g, ' ')} - ${a.href}`)
-                .filter((line) => line.length > 3)
-                .join('\n')
-          : pageExtractText,
-      });
+      try {
+        frames = await chrome.scripting.executeScript({
+          target: { tabId, allFrames: true },
+          func: links
+            ? () =>
+                Array.from(document.querySelectorAll('a[href]'))
+                  .filter((a) => a.offsetParent !== null || a === document.body)
+                  .map((a) => `${a.innerText.trim().replace(/\s+/g, ' ')} - ${a.href}`)
+                  .filter((line) => line.length > 3)
+                  .join('\n')
+            : pageExtractText,
+        });
+      } catch (e) {
+        if (action !== 'visit' || !/error page/.test(e.message)) throw e;
+        const nav = navResult.get(tabId) || {};
+        const detail = nav.error ? `error ${nav.error}` : e.message;
+        return { text: `HTTP ${nav.status || 'error'} · final_url ${nav.url || targetUrl} · ${detail}` };
+      }
+      if (action === 'visit') {
+        const [main] = await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [0] },
+          func: () => {
+            const nav = performance.getEntriesByType('navigation')[0];
+            return { status: nav ? nav.responseStatus : 0, url: location.href, title: document.title };
+          },
+        });
+        const nav = navResult.get(tabId) || {};
+        const status = nav.status || main.result.status;
+        const finalUrl = main.result.url;
+        const title = main.result.title;
+        const head = `${title}\n${frames.map((f) => f.result).filter(Boolean).join('\n').slice(0, 300)}`;
+        const soft = !(status >= 400) && /\b404\b|page not found|not found|doesn'?t exist|does not exist|\boops\b/i.test(head);
+        statusLine = `HTTP ${status || 'unknown'} · final_url ${finalUrl}${soft ? ' · soft_404: true' : ''}`;
+      }
     } finally {
       await releaseTab(tabId, close);
     }
-    return { text: frames.map((f) => f.result).filter(Boolean).join('\n') };
+    const body = frames.map((f) => f.result).filter(Boolean).join('\n');
+    return { text: statusLine ? `${statusLine}\n${body}` : body };
   }
 
   if (action === 'attach') {
