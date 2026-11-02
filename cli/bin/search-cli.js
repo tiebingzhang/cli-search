@@ -187,7 +187,9 @@ commands:
 options (google/ddg/visit only):
   --wait=ms                 wait this long after load before reading the page (default 1000)
   --links                   return links instead of page text
-  --limit=N                 with google/ddg --links, return up to N results (default 15)
+  --no-chrome               google/ddg text: drop AI Overview, page navigation, and the footer with your IP location
+  --json                    google/ddg: print results as a JSON array of {title,url,snippet}
+  --limit=N                 with google/ddg --links or --json, return up to N results (default 15)
   --close                   close the tab after reading it
 
 security:
@@ -384,7 +386,7 @@ async function main() {
 
   if (!['google', 'ddg', 'visit'].includes(action)) {
     console.error(
-      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links] [--limit=N] [--close]'
+      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links] [--json] [--no-chrome] [--limit=N] [--close]'
     );
     process.exit(1);
   }
@@ -392,6 +394,8 @@ async function main() {
   let waitMs = 1000;
   let links = false;
   let close = false;
+  let json = false;
+  let noChrome = false;
   let limit;
   const args = [];
   for (const token of rest) {
@@ -403,6 +407,10 @@ async function main() {
       waitMs = parseInt(m[1], 10);
     } else if (token === '--links') {
       links = true;
+    } else if (token === '--json') {
+      json = true;
+    } else if (token === '--no-chrome') {
+      noChrome = true;
     } else if (token === '--close') {
       close = true;
     } else {
@@ -415,7 +423,7 @@ async function main() {
     console.error('missing query/url argument');
     process.exit(1);
   }
-  const req = action === 'visit' ? { action, url: arg, waitMs, links, close } : { action, query: arg, waitMs, links, close, limit };
+  const req = action === 'visit' ? { action, url: arg, waitMs, links, close } : { action, query: arg, waitMs, links, json, noChrome, close, limit };
   const res = await sendRequest(req);
   process.stdout.write(res.text + '\n');
   if (res.note) console.error(res.note);

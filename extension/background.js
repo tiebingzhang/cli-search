@@ -430,7 +430,7 @@ function pageContextText() {
   return text;
 }
 
-function pageSearchLinks() {
+function pageSearchLinks(mode) {
   const DROP_PARAMS = /^(utm_.*|sca_esv|sxsrf|ved|fbs|sa|ictx|usg|ei|gclid|fbclid|oq|gs_lcrp|sclient|source|uact|rlz|cd|cad|biw|bih|dpr|sei|iflsig)$/;
   const SEARCH_HOST = /^(www\.)?google\.[a-z.]+$/;
   const SEARCH_NAV = /^\/(search|webhp|imghp|intl|preferences|advanced_search|setprefs|url|supported_domains|policies|ServiceLogin)(\/|$)/;
@@ -471,13 +471,46 @@ function pageSearchLinks() {
     const title = ((h || a).innerText || '').trim().replace(/\s+/g, ' ').split('\n')[0];
     if (!title) return;
     seen.add(url);
-    out.push(`${title} — ${url}`);
+    out.push({ title, url, snippet: titled ? snippetOf(a, title) : '' });
+  };
+  const TITLE_SEL = 'h3, h2';
+  const snippetOf = (a, title) => {
+    const aLen = (a.innerText || '').length;
+    let el = a;
+    while (el.parentElement && el.parentElement !== document.body) {
+      const p = el.parentElement;
+      if (p.querySelectorAll(TITLE_SEL).length > 1) break;
+      el = p;
+      if ((el.innerText || '').length > aLen + 60) break;
+    }
+    const lines = (el.innerText || '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l && l !== title && !title.includes(l) && !l.includes(' › ') && !/^https?:\/\//.test(l));
+    const best = lines.sort((x, y) => y.length - x.length)[0] || '';
+    return best.length >= 40 ? best : '';
   };
   const anchors = Array.from(document.querySelectorAll('a[href]'));
   const isTitled = (a) => a.querySelector('h3, h2') || a.matches('[data-testid="result-title-a"]');
   anchors.filter(isTitled).forEach((a) => add(a, true));
   anchors.filter((a) => !isTitled(a)).forEach((a) => add(a, false));
-  return out.join('\n');
+  return mode === 'json' ? JSON.stringify(out) : out.map((r) => `${r.title} — ${r.url}`).join('\n');
+}
+
+function stripLocation(text) {
+  return text
+    .split('\n')
+    .filter((l) => !/From your IP address|Update location/i.test(l))
+    .join('\n');
+}
+
+function stripSearchChrome(text) {
+  let lines = text.split('\n');
+  const web = lines.findIndex((l) => ['Web results', 'Was this helpful?'].includes(l.trim()));
+  if (web !== -1) lines = lines.slice(web + 1);
+  const end = lines.findIndex((l) => /^(Page Navigation|Footer Links|Protect your data as you search)/.test(l.trim()));
+  if (end !== -1) lines = lines.slice(0, end);
+  return lines.filter((l) => !/^Missing:/.test(l.trim())).join('\n');
 }
 
 function pageExtractText() {
@@ -1094,7 +1127,7 @@ function resolveFrameId(tabId, elementId) {
 }
 
 async function handleRequest(msg) {
-  const { action, query, url, waitMs, links, limit, context, elementId, text, value, chords, trusted, force, label, close } = msg;
+  const { action, query, url, waitMs, links, json, noChrome, limit, context, elementId, text, value, chords, trusted, force, label, close } = msg;
 
   if (action === 'google' || action === 'ddg' || action === 'visit') {
     const targetUrl = buildUrl(action, query, url);
@@ -1107,7 +1140,8 @@ async function handleRequest(msg) {
       try {
         frames = await chrome.scripting.executeScript({
           target: { tabId, allFrames: true },
-          func: links && action !== 'visit'
+          args: [json ? 'json' : 'lines'],
+          func: (links || json) && action !== 'visit'
             ? pageSearchLinks
             : links
             ? () =>
@@ -1145,12 +1179,28 @@ async function handleRequest(msg) {
     }
     let body = frames.map((f) => f.result).filter(Boolean).join('\n');
     let note;
-    if (links && action !== 'visit') {
-      const cap = typeof limit === 'number' && limit > 0 ? limit : 15;
+    const cap = typeof limit === 'number' && limit > 0 ? limit : 15;
+    if (json && action !== 'visit') {
+      const all = [];
+      const seenUrls = new Set();
+      for (const f of frames) {
+        if (!f.result) continue;
+        for (const r of JSON.parse(f.result)) {
+          if (seenUrls.has(r.url)) continue;
+          seenUrls.add(r.url);
+          all.push(r);
+        }
+      }
+      body = JSON.stringify(all.slice(0, cap), null, 2);
+      if (all.length > cap) note = `showing ${cap} of ${all.length} results; use --limit=N for more`;
+    } else if (links && action !== 'visit') {
       const lines = [...new Set(body.split('\n'))];
       body = lines.slice(0, cap).join('\n');
       if (lines.length > cap) note = `showing ${cap} of ${lines.length} links; use --limit=N for more`;
+    } else if (noChrome && action !== 'visit') {
+      body = stripSearchChrome(body);
     }
+    if (action !== 'visit' && !links && !json) body = stripLocation(body);
     return { text: statusLine ? `${statusLine}\n${body}` : body, note };
   }
 
