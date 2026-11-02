@@ -53,8 +53,17 @@ search-cli google "pi calculator"
 # Search DuckDuckGo with links only
 search-cli ddg "node.js docs" --links
 
+# Search results as JSON: [{title, url, snippet}]
+search-cli google "pi calculator" --json --limit=5
+
+# Search text without AI Overview, page navigation, or footer
+search-cli google "pi calculator" --no-chrome
+
 # Visit a URL with custom wait time
 search-cli visit "https://example.com" --wait=3000
+
+# Stop waiting after 8 seconds and return what has loaded
+search-cli visit "https://www.youtube.com/" --max-wait=8000
 
 # Close the tab after reading it
 search-cli visit "https://example.com" --close
@@ -87,6 +96,51 @@ search-cli key Tab --trusted    # real key event: actually moves focus
 search-cli clearlabels
 search-cli closetabs
 ```
+
+## Visiting and searching
+
+`visit` prints a status line first:
+
+```
+HTTP 404 · final_url https://example.com/missing · settle: true
+```
+
+- `HTTP <code>` is the status of the page. A page that fails to load shows
+  `HTTP error` with the network error, such as `net::ERR_NAME_NOT_RESOLVED`.
+- `final_url` is where the page ended up after redirects.
+- `soft_404: true` appears when the status is below 400 but the title or the
+  first 300 characters say the page was not found.
+- `settle: false` means the page was still loading at the deadline. The tool
+  returns what has rendered and prints a warning on stderr.
+
+Options for `google`, `ddg`, and `visit`:
+
+- `--wait=ms` waits this long after the page loads before reading it (default 1000).
+- `--max-wait=ms` caps load plus wait (default 25000). A read can run about 1.5
+  seconds past it. For a page that is still loading, the tool reads the text through
+  `chrome.debugger`, which shows Chrome's "started debugging this browser" banner.
+- `--close` closes the tab after reading it.
+
+Options for `google` and `ddg` only:
+
+- `--links` prints up to 15 results as `TITLE — URL`. It drops Google and DuckDuckGo
+  navigation links, unwraps redirect links, strips tracking parameters from Google's
+  own pages, and removes duplicates. Results hosted on Google (Docs, Sites, Scholar)
+  stay.
+- `--json` prints a JSON array of `{title, url, snippet}`.
+- `--limit=N` sets the count for `--links` and `--json`. When results are cut, the tool
+  prints `showing N of M` on stderr.
+- `--no-chrome` removes the AI Overview, "Missing:" lines, page navigation, and footer
+  from the text output.
+
+Text output from `google` and `ddg` never includes the IP-derived location line.
+
+### Parallel calls
+
+Several `google`, `ddg`, and `visit` calls can run at once. The first call uses the
+main CLI tab. A call that finds that tab busy opens a new tab in the CLI group, and the
+tab stays open unless you pass `--close`. `search-cli closetabs` closes them all.
+`snapshot`, `click`, and the other interaction commands act on the main tab only.
 
 ## Filling form fields
 
