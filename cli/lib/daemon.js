@@ -213,10 +213,11 @@ function dispatch(req, conn) {
     return conn.end(JSON.stringify({ error: extensionHint() }) + '\n');
   }
   const id = nextId++;
+  const timeoutMs = typeof req.maxWaitMs === 'number' ? Math.max(TIMEOUT_MS, req.maxWaitMs + 10000) : TIMEOUT_MS;
   const timer = setTimeout(() => {
     pending.delete(id);
     conn.end(JSON.stringify({ error: 'timed out waiting for browser' }) + '\n');
-  }, TIMEOUT_MS);
+  }, timeoutMs);
 
   pending.set(id, (msg) => {
     clearTimeout(timer);

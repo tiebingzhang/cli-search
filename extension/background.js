@@ -84,6 +84,20 @@ async function sendTrustedKeys(tabId, chords) {
   return { ok: true, count: chords.length };
 }
 
+async function readLoadingPage(tabId) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, '1.3');
+  try {
+    const res = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: 'JSON.stringify({ text: document.body ? document.body.innerText : "", url: location.href })',
+      returnByValue: true,
+    });
+    return JSON.parse(res.result.value);
+  } finally {
+    await chrome.debugger.detach(target);
+  }
+}
+
 async function getReuseTabId() {
   const { reuseTabId } = await chrome.storage.session.get('reuseTabId');
   return typeof reuseTabId === 'number' ? reuseTabId : null;
@@ -173,20 +187,27 @@ function buildUrl(action, query, url) {
 }
 
 function waitForTabLoad(tabId) {
-  return new Promise((resolve) => {
-    function listener(id, changeInfo) {
+  let listener;
+  const p = new Promise((resolve) => {
+    listener = (id, changeInfo) => {
       if (id === tabId && changeInfo.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(listener);
         resolve();
       }
-    }
+    };
     chrome.tabs.onUpdated.addListener(listener);
   });
+  p.cancel = () => chrome.tabs.onUpdated.removeListener(listener);
+  return p;
 }
 
 const busyTabs = new Set();
 const navResult = new Map();
 
+chrome.webRequest.onResponseStarted.addListener(
+  (d) => navResult.set(d.tabId, { status: d.statusCode, url: d.url }),
+  { urls: ['<all_urls>'], types: ['main_frame'] }
+);
 chrome.webRequest.onCompleted.addListener(
   (d) => navResult.set(d.tabId, { status: d.statusCode, url: d.url }),
   { urls: ['<all_urls>'], types: ['main_frame'] }
@@ -1127,18 +1148,25 @@ function resolveFrameId(tabId, elementId) {
 }
 
 async function handleRequest(msg) {
-  const { action, query, url, waitMs, links, json, noChrome, limit, context, elementId, text, value, chords, trusted, force, label, close } = msg;
+  const { action, query, url, waitMs, links, json, noChrome, limit, maxWaitMs, context, elementId, text, value, chords, trusted, force, label, close } = msg;
 
   if (action === 'google' || action === 'ddg' || action === 'visit') {
     const targetUrl = buildUrl(action, query, url);
+    const deadline = Date.now() + (typeof maxWaitMs === 'number' ? maxWaitMs : 25000);
     const { tabId, loaded } = await acquireTab(targetUrl);
     let frames;
     let statusLine = null;
+    let settled = true;
     try {
-      await loaded;
-      await new Promise((r) => setTimeout(r, typeof waitMs === 'number' ? waitMs : 1000));
+      const pause = (ms) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+      settled = await Promise.race([loaded.then(() => true), pause(deadline - Date.now()).then(() => false)]);
+      if (!settled) loaded.cancel();
+      const TIMED_OUT = Symbol();
+      const within = (promise) =>
+        Promise.race([promise, pause(deadline + 1500 - Date.now()).then(() => TIMED_OUT)]);
+      await pause(Math.min(typeof waitMs === 'number' ? waitMs : 1000, deadline - Date.now()));
       try {
-        frames = await chrome.scripting.executeScript({
+        frames = await within(chrome.scripting.executeScript({
           target: { tabId, allFrames: true },
           args: [json ? 'json' : 'lines'],
           func: (links || json) && action !== 'visit'
@@ -1151,7 +1179,19 @@ async function handleRequest(msg) {
                   .filter((line) => line.length > 3)
                   .join('\n')
             : pageExtractText,
-        });
+        }));
+        if (frames === TIMED_OUT) {
+          const nav = navResult.get(tabId) || {};
+          let partial = null;
+          if (action === 'visit' && !links) {
+            try {
+              partial = await Promise.race([readLoadingPage(tabId), pause(2000).then(() => null)]);
+            } catch (e) {}
+          }
+          const head = action === 'visit' ? `HTTP ${nav.status || 'unknown'} · final_url ${(partial && partial.url !== 'about:blank' && partial.url) || nav.url || targetUrl} · settle: false\n` : '';
+          const note = partial && partial.text ? 'page still loading at the deadline; returning partial content' : 'page produced no content before the deadline';
+          return { text: head + (partial ? partial.text : ''), note };
+        }
       } catch (e) {
         if (action !== 'visit' || !/error page/.test(e.message)) throw e;
         const nav = navResult.get(tabId) || {};
@@ -1163,7 +1203,7 @@ async function handleRequest(msg) {
           target: { tabId, frameIds: [0] },
           func: () => {
             const nav = performance.getEntriesByType('navigation')[0];
-            return { status: nav ? nav.responseStatus : 0, url: location.href, title: document.title };
+            return { status: nav ? nav.responseStatus : 0, url: location.href, title: document.title, ready: document.readyState };
           },
         });
         const nav = navResult.get(tabId) || {};
@@ -1172,7 +1212,8 @@ async function handleRequest(msg) {
         const title = main.result.title;
         const head = `${title}\n${frames.map((f) => f.result).filter(Boolean).join('\n').slice(0, 300)}`;
         const soft = !(status >= 400) && /\b404\b|page not found|not found|doesn'?t exist|does not exist|\boops\b/i.test(head);
-        statusLine = `HTTP ${status || 'unknown'} · final_url ${finalUrl}${soft ? ' · soft_404: true' : ''}`;
+        if (main.result.ready !== 'complete') settled = false;
+        statusLine = `HTTP ${status || 'unknown'} · final_url ${finalUrl}${soft ? ' · soft_404: true' : ''} · settle: ${settled}`;
       }
     } finally {
       await releaseTab(tabId, close);
@@ -1201,6 +1242,7 @@ async function handleRequest(msg) {
       body = stripSearchChrome(body);
     }
     if (action !== 'visit' && !links && !json) body = stripLocation(body);
+    if (!settled) note = [note, 'page still loading at the deadline; returning partial content'].filter(Boolean).join('; ');
     return { text: statusLine ? `${statusLine}\n${body}` : body, note };
   }
 

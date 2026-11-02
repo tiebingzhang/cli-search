@@ -186,6 +186,7 @@ commands:
 
 options (google/ddg/visit only):
   --wait=ms                 wait this long after load before reading the page (default 1000)
+  --max-wait=ms             stop waiting for the page after this long and return partial content (default 25000)
   --links                   return links instead of page text
   --no-chrome               google/ddg text: drop AI Overview, page navigation, and the footer with your IP location
   --json                    google/ddg: print results as a JSON array of {title,url,snippet}
@@ -386,7 +387,7 @@ async function main() {
 
   if (!['google', 'ddg', 'visit'].includes(action)) {
     console.error(
-      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links] [--json] [--no-chrome] [--limit=N] [--close]'
+      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--max-wait=ms] [--links] [--json] [--no-chrome] [--limit=N] [--close]'
     );
     process.exit(1);
   }
@@ -397,11 +398,15 @@ async function main() {
   let json = false;
   let noChrome = false;
   let limit;
+  let maxWaitMs;
   const args = [];
   for (const token of rest) {
     const m = /^--wait=(\d+)$/.exec(token);
+    const mw = /^--max-wait=(\d+)$/.exec(token);
     const lm = /^--limit=(\d+)$/.exec(token);
-    if (lm) {
+    if (mw) {
+      maxWaitMs = parseInt(mw[1], 10);
+    } else if (lm) {
       limit = parseInt(lm[1], 10);
     } else if (m) {
       waitMs = parseInt(m[1], 10);
@@ -423,7 +428,7 @@ async function main() {
     console.error('missing query/url argument');
     process.exit(1);
   }
-  const req = action === 'visit' ? { action, url: arg, waitMs, links, close } : { action, query: arg, waitMs, links, json, noChrome, close, limit };
+  const req = action === 'visit' ? { action, url: arg, waitMs, maxWaitMs, links, close } : { action, query: arg, waitMs, maxWaitMs, links, json, noChrome, close, limit };
   const res = await sendRequest(req);
   process.stdout.write(res.text + '\n');
   if (res.note) console.error(res.note);
