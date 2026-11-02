@@ -187,6 +187,7 @@ commands:
 options (google/ddg/visit only):
   --wait=ms                 wait this long after load before reading the page (default 1000)
   --links                   return links instead of page text
+  --limit=N                 with google/ddg --links, return up to N results (default 15)
   --close                   close the tab after reading it
 
 security:
@@ -383,7 +384,7 @@ async function main() {
 
   if (!['google', 'ddg', 'visit'].includes(action)) {
     console.error(
-      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links] [--close]'
+      'usage: search-cli <start|stop|status|unpin|google|ddg|visit|attach|snapshot|fields|click|type|key|clearlabels|closetabs|readdropdown|selectoption|screenshot> [args] [--wait=ms] [--links] [--limit=N] [--close]'
     );
     process.exit(1);
   }
@@ -391,10 +392,14 @@ async function main() {
   let waitMs = 1000;
   let links = false;
   let close = false;
+  let limit;
   const args = [];
   for (const token of rest) {
     const m = /^--wait=(\d+)$/.exec(token);
-    if (m) {
+    const lm = /^--limit=(\d+)$/.exec(token);
+    if (lm) {
+      limit = parseInt(lm[1], 10);
+    } else if (m) {
       waitMs = parseInt(m[1], 10);
     } else if (token === '--links') {
       links = true;
@@ -410,9 +415,10 @@ async function main() {
     console.error('missing query/url argument');
     process.exit(1);
   }
-  const req = action === 'visit' ? { action, url: arg, waitMs, links, close } : { action, query: arg, waitMs, links, close };
+  const req = action === 'visit' ? { action, url: arg, waitMs, links, close } : { action, query: arg, waitMs, links, close, limit };
   const res = await sendRequest(req);
   process.stdout.write(res.text + '\n');
+  if (res.note) console.error(res.note);
 }
 
 async function sendRequest(req) {

@@ -430,6 +430,56 @@ function pageContextText() {
   return text;
 }
 
+function pageSearchLinks() {
+  const DROP_PARAMS = /^(utm_.*|sca_esv|sxsrf|ved|fbs|sa|ictx|usg|ei|gclid|fbclid|oq|gs_lcrp|sclient|source|uact|rlz|cd|cad|biw|bih|dpr|sei|iflsig)$/;
+  const SEARCH_HOST = /^(www\.)?google\.[a-z.]+$/;
+  const SEARCH_NAV = /^\/(search|webhp|imghp|intl|preferences|advanced_search|setprefs|url|supported_domains|policies|ServiceLogin)(\/|$)/;
+  const ASSET_HOST = /(^|\.)(googleusercontent\.com|gstatic\.com)$/;
+  const clean = (href) => {
+    let u;
+    try {
+      u = new URL(href, location.href);
+    } catch (e) {
+      return null;
+    }
+    if (SEARCH_HOST.test(u.hostname) && u.pathname === '/url') {
+      const t = u.searchParams.get('q') || u.searchParams.get('url');
+      return t ? clean(t) : null;
+    }
+    if (u.hostname.endsWith('duckduckgo.com') && u.pathname.startsWith('/l/')) {
+      const t = u.searchParams.get('uddg');
+      return t ? clean(t) : null;
+    }
+    if (!/^https?:$/.test(u.protocol) || ASSET_HOST.test(u.hostname)) return null;
+    if (/^accounts\.google\.[a-z.]+$/.test(u.hostname)) return null;
+    if (/^(www\.|html\.)?duckduckgo\.com$/.test(u.hostname)) return null;
+    if (SEARCH_HOST.test(u.hostname)) {
+      if (SEARCH_NAV.test(u.pathname)) return null;
+      for (const k of [...u.searchParams.keys()]) if (DROP_PARAMS.test(k)) u.searchParams.delete(k);
+    }
+    u.hash = u.hash.replace(/:~:.*$/, '');
+    return u.toString().replace(/#$/, '');
+  };
+  const out = [];
+  const seen = new Set();
+  const add = (a, titled) => {
+    if (a.getClientRects().length === 0) return;
+    const url = clean(a.href);
+    if (!url || seen.has(url)) return;
+    if (!titled && /(^|\.)google\.[a-z.]+$/.test(new URL(url).hostname)) return;
+    const h = a.querySelector('h3, h2');
+    const title = ((h || a).innerText || '').trim().replace(/\s+/g, ' ').split('\n')[0];
+    if (!title) return;
+    seen.add(url);
+    out.push(`${title} — ${url}`);
+  };
+  const anchors = Array.from(document.querySelectorAll('a[href]'));
+  const isTitled = (a) => a.querySelector('h3, h2') || a.matches('[data-testid="result-title-a"]');
+  anchors.filter(isTitled).forEach((a) => add(a, true));
+  anchors.filter((a) => !isTitled(a)).forEach((a) => add(a, false));
+  return out.join('\n');
+}
+
 function pageExtractText() {
   const rawText = () => {
     const SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, HEAD: 1, TITLE: 1, META: 1, LINK: 1, IFRAME: 1, SVG: 1 };
@@ -1044,7 +1094,7 @@ function resolveFrameId(tabId, elementId) {
 }
 
 async function handleRequest(msg) {
-  const { action, query, url, waitMs, links, context, elementId, text, value, chords, trusted, force, label, close } = msg;
+  const { action, query, url, waitMs, links, limit, context, elementId, text, value, chords, trusted, force, label, close } = msg;
 
   if (action === 'google' || action === 'ddg' || action === 'visit') {
     const targetUrl = buildUrl(action, query, url);
@@ -1057,7 +1107,9 @@ async function handleRequest(msg) {
       try {
         frames = await chrome.scripting.executeScript({
           target: { tabId, allFrames: true },
-          func: links
+          func: links && action !== 'visit'
+            ? pageSearchLinks
+            : links
             ? () =>
                 Array.from(document.querySelectorAll('a[href]'))
                   .filter((a) => a.offsetParent !== null || a === document.body)
@@ -1091,8 +1143,15 @@ async function handleRequest(msg) {
     } finally {
       await releaseTab(tabId, close);
     }
-    const body = frames.map((f) => f.result).filter(Boolean).join('\n');
-    return { text: statusLine ? `${statusLine}\n${body}` : body };
+    let body = frames.map((f) => f.result).filter(Boolean).join('\n');
+    let note;
+    if (links && action !== 'visit') {
+      const cap = typeof limit === 'number' && limit > 0 ? limit : 15;
+      const lines = [...new Set(body.split('\n'))];
+      body = lines.slice(0, cap).join('\n');
+      if (lines.length > cap) note = `showing ${cap} of ${lines.length} links; use --limit=N for more`;
+    }
+    return { text: statusLine ? `${statusLine}\n${body}` : body, note };
   }
 
   if (action === 'attach') {
